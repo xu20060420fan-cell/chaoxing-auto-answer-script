@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         智能自动答题助手
 // @namespace    http://tampermonkey.net/
-// @version      1.8
+// @version      2.7
 // @description  全自动网课答题助手，支持多网课平台、多题库融合、图片题目识别
 // @author       xu20060420fan-cell
-// @homepage     https://github.com/xu20060420fan-cell/xufan-tools
-// @supportURL   https://github.com/xu20060420fan-cell/xufan-tools/issues
+// @homepage     https://github.com/xu20060420fan-cell/xxt-course-helper
+// @supportURL   https://github.com/xu20060420fan-cell/xxt-course-helper/issues
 // @match        *://*/*
 // @grant        GM_addStyle
 // @grant        GM_setValue
