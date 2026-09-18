@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>刷课题库管理后台</title>
+<style>
+  :root { --bg:#0f172a; --panel:#1e293b; --border:#334155; --text:#e2e8f0; --muted:#94a3b8; --accent:#38bdf8; --ok:#10b981; --warn:#f59e0b; --err:#ef4444; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:16px 24px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; }
+  .stats { display:flex; gap:12px; flex-wrap:wrap; padding:16px 24px; }
+  .stat { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:12px 18px; }
+  .stat .n { font-size:22px; font-weight:700; color:var(--accent); }
+  .stat .l { font-size:12px; color:var(--muted); }
+  main { padding:0 24px 40px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:16px; }
+  .card h2 { font-size:14px; margin:0 0 12px; color:var(--accent); }
+  input, textarea, select, button { font-family:inherit; font-size:13px; background:#0b1220; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; }
+  textarea { width:100%; min-height:80px; resize:vertical; }
+  button { cursor:pointer; background:var(--accent); color:#082032; font-weight:600; border:none; }
+  button.ghost { background:transparent; border:1px solid var(--border); color:var(--text); }
+  button.danger { background:var(--err); color:#fff; }
+  .row { display:flex; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
+  .grow { flex:1; min-width:200px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  .tag { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; background:#334155; }
+  .score { color:var(--warn); font-weight:600; }
+  .muted { color:var(--muted); }
+  .msg { padding:10px 12px; border-radius:6px; margin-bottom:10px; display:none; }
+  .msg.ok { background:rgba(16,185,129,.15); color:var(--ok); display:block; }
+  .msg.err { background:rgba(239,68,68,.15); color:var(--err); display:block; }
+  .code { font-family:ui-monospace,Consolas,monospace; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🦐 刷课题库管理后台</h1>
+  <span class="muted">命中阈值、题型分布见下方统计</span>
+</header>
+<div class="stats" id="stats"></div>
+<main>
+  <div class="card">
+    <h2>搜索 / 匹配预览</h2>
+    <div class="row">
+      <input class="grow" id="searchInput" placeholder="输入题干，查看模糊匹配结果与分数（模拟脚本查询）">
+      <button onclick="doSearch()">搜索</button>
+    </div>
+    <div id="searchResult" class="muted">输入关键词后显示结果。</div>
+  </div>
+
+  <div class="card">
+    <h2>新增单题</h2>
+    <div class="row">
+      <select id="addType">
+        <option value="单选题">单选题</option>
+        <option value="多选题">多选题</option>
+        <option value="判断题">判断题</option>
+        <option value="填空题">填空题</option>
+      </select>
+      <input class="grow" id="addAnswer" placeholder="答案：单选 A / 多选 ABD / 判断 对·错 / 填空 文本">
+    </div>
+    <textarea id="addQuestion" placeholder="题干"></textarea>
+    <textarea id="addOptions" placeholder="选项（每行一个，如：A.选项一）" style="margin-top:8px"></textarea>
+    <div class="row" style="margin-top:10px">
+      <button onclick="doAdd()">提交</button>
+    </div>
+    <div class="msg" id="addMsg"></div>
+  </div>
+
+  <div class="card">
+    <h2>批量导入（去重合并）</h2>
+    <div class="row">
+      <select id="impFormat">
+        <option value="auto">自动识别</option>
+        <option value="tsv">TSV（题型	题目	选项	答案）</option>
+        <option value="json">JSON</option>
+        <option value="text">纯文本</option>
+      </select>
+    </div>
+    <textarea id="impText" placeholder="粘贴 TSV 表格 或 JSON 数组，格式与 seed/*.csv 一致"></textarea>
+    <div class="row" style="margin-top:10px">
+      <button onclick="doImport()">导入</button>
+    </div>
+    <div class="msg" id="impMsg"></div>
+  </div>
+
+  <div class="card">
+    <h2>题目列表</h2>
+    <div class="row">
+      <input class="grow" id="listQ" placeholder="按题干关键字过滤">
+      <button onclick="loadList(1)">查询</button>
+      <button class="ghost" onclick="loadList(1)">刷新</button>
+    </div>
+    <div id="listMeta" class="muted" style="margin-bottom:8px"></div>
+    <table id="listTable"><thead><tr><th>题干</th><th>题型</th><th>答案</th><th>命中</th><th></th></tr></thead><tbody></tbody></table>
+    <div class="row" style="margin-top:10px">
+      <button class="ghost" id="prevBtn" onclick="loadList(curPage-1)">上一页</button>
+      <span id="pageInfo" class="muted"></span>
+      <button class="ghost" id="nextBtn" onclick="loadList(curPage+1)">下一页</button>
+    </div>
+  </div>
+</main>
+<script>
+let curPage = 1, pageSize = 50;
+const $ = id => document.getElementById(id);
+
+function msg(id, ok, text) {
+  const el = $(id);
+  el.className = 'msg ' + (ok ? 'ok' : 'err');
+  el.textContent = text;
+}
+
+async function loadStats() {
+  const r = await fetch('/api/stats').then(x => x.json());
+  if (r.code !== 1) return;
+  const byType = r.byType || {};
+  const tName = { single:'单选题', multi:'多选题', judge:'判断题', fill:'填空题', unknown:'未知' };
+  let html = `<div class="stat"><div class="n">${r.total}</div><div class="l">题库总量</div></div>`;
+  html += `<div class="stat"><div class="n">${r.withAnswer}</div><div class="l">有答案</div></div>`;
+  html += `<div class="stat"><div class="n">${r.minScore}</div><div class="l">命中阈值</div></div>`;
+  for (const k of Object.keys(byType)) {
+    html += `<div class="stat"><div class="n">${byType[k]}</div><div class="l">${tName[k]||k}</div></div>`;
+  }
+  $('stats').innerHTML = html;
+}
+
+async function doSearch() {
+  const q = $('searchInput').value.trim();
+  if (!q) return;
+  const r = await fetch('/api/search?q=' + encodeURIComponent(q) + '&limit=20').then(x => x.json());
+  const items = r.items || [];
+  if (!items.length) { $('searchResult').innerHTML = '<span class="muted">无结果</span>'; return; }
+  $('searchResult').innerHTML = items.map(it =>
+    `<div style="padding:6px 0;border-bottom:1px solid var(--border)">
+      <span class="score">${it.score}</span> &nbsp; [${it.type||'未知'}] ${escapeHtml(it.question)}
+      <div class="muted">答案: <b>${escapeHtml(it.answer)}</b> ${it.source ? ' · 来源 '+escapeHtml(it.source) : ''}</div>
+    </div>`).join('');
+}
+
+async function doAdd() {
+  const question = $('addQuestion').value.trim();
+  const answer = $('addAnswer').value.trim();
+  if (!question || !answer) { msg('addMsg', false, '题干和答案必填'); return; }
+  const optRaw = $('addOptions').value.trim();
+  const options = optRaw ? optRaw.split('\n').map(l => { const m = l.match(/^([A-Fa-f])[\s\.、\)）:：]+(.+)$/); return m ? {letter:m[1].toUpperCase(), text:m[2].trim()} : null; }).filter(Boolean) : null;
+  const r = await fetch('/api/add', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ question, type:$('addType').value, options, answer }) }).then(x => x.json());
+  msg('addMsg', r.code === 1, r.code === 1 ? '已' + (r.action==='merge'?'合并':'新增') + '（id: '+r.id+'）' : (r.msg||'失败'));
+  if (r.code === 1) { $('addQuestion').value=''; $('addOptions').value=''; $('addAnswer').value=''; loadStats(); loadList(curPage); }
+}
+
+async function doImport() {
+  const text = $('impText').value.trim();
+  if (!text) { msg('impMsg', false, '请粘贴内容'); return; }
+  const format = $('impFormat').value;
+  let body;
+  try { body = JSON.parse(text); if (!Array.isArray(body) && !body.items && !body.text) body = { text, format }; }
+  catch(e) { body = { text, format }; }
+  const r = await fetch('/api/bulk', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) }).then(x => x.json());
+  msg('impMsg', r.code === 1, r.code === 1 ? `导入完成：新增 ${r.added}，合并 ${r.merged}，跳过 ${r.skipped}` : (r.msg||'失败'));
+  if (r.code === 1) { loadStats(); loadList(1); }
+}
+
+async function loadList(page) {
+  curPage = Math.max(page, 1);
+  const kw = $('listQ').value.trim();
+  const r = await fetch(`/api/q?page=${curPage}&pageSize=${pageSize}&q=${encodeURIComponent(kw)}`).then(x => x.json());
+  const items = r.items || [];
+  $('listMeta').textContent = `共 ${r.total} 条，第 ${r.page} 页`;
+  $('pageInfo').textContent = `${r.page} / ${Math.max(1, Math.ceil(r.total/pageSize))}`;
+  $('prevBtn').disabled = r.page <= 1;
+  $('nextBtn').disabled = r.page * pageSize >= r.total;
+  $('listTable').querySelector('tbody').innerHTML = items.map(it =>
+    `<tr>
+      <td>${escapeHtml(it.question)}</td>
+      <td><span class="tag">${escapeHtml(it.type||'未知')}</span></td>
+      <td class="code">${escapeHtml(it.answer)}</td>
+      <td>${it.count||0}</td>
+      <td><button class="danger" onclick="doDel('${it.id}')">删</button></td>
+    </tr>`).join('');
+}
+
+async function doDel(id) {
+  if (!confirm('确认删除该题？')) return;
+  const r = await fetch('/api/q/' + id, { method:'DELETE' }).then(x => x.json());
+  if (r.code === 1) { loadStats(); loadList(curPage); }
+}
+
+function escapeHtml(s) {
+  return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+loadStats();
+loadList(1);
+</script>
+</body>
+</html>

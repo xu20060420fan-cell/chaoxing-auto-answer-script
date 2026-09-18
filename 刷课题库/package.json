@@ -1,0 +1,19 @@
+{
+  "name": "shuake-tiku-server",
+  "version": "1.0.0",
+  "description": "智能自动答题助手 · 配套远程题库服务（兼容 tikuAdapter 协议）",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "import": "node import.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  },
+  "license": "MIT"
+}

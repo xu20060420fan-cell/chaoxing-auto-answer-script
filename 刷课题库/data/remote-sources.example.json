@@ -1,0 +1,29 @@
+{
+  "_说明": "把本文件复制为 remote-sources.json 并填入真实地址后生效；server 重启时自动加载。不内置任何真实 URL，避免侵权/失效问题。",
+  "tikuA": {
+    "enabled": false,
+    "protocol": "tikuAdapter",
+    "url": "https://your-domain.com/tiku",
+    "timeout": 5000,
+    "headers": {},
+    "note": "通用 tikuAdapter 协议：POST body={question,options,type} -> {answer:{allAnswer:[...]}}"
+  },
+  "enncy": {
+    "enabled": false,
+    "protocol": "enncy",
+    "url": "https://your-domain.com/api",
+    "token": "YOUR_TOKEN",
+    "timeout": 5000,
+    "note": "enncy 协议：GET ?question=...&token=... -> {code,data:{answer}}"
+  },
+  "json1": {
+    "enabled": false,
+    "protocol": "json",
+    "url": "https://your-domain.com/query",
+    "method": "POST",
+    "data": { "question": "${question}", "type": "${type}" },
+    "headers": { "Authorization": "Bearer YOUR_TOKEN" },
+    "timeout": 5000,
+    "note": "通用 JSON：支持 ${question}/${options}/${type} 模板；可用 extractor 字段写 JS 函数从 raw 提取答案数组"
+  }
+}
