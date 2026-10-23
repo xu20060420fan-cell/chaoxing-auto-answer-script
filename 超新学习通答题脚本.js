@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         智能自动答题助手
 // @namespace    http://tampermonkey.net/
-// @version      2.7
-// @description  全自动网课答题助手，支持多网课平台、多题库融合、图片题目识别
+// @version      2.9
+// @description  全自动网课答题助手，支持多网课平台、多题库融合、图片题目识别（2026-10-23 实机复核版：修复一章多视频时在多个视频之间轮流重播 / 漏视频 —— 改为播放队列只进不退 + 目标视频互斥 + 按视频地址精确匹配任务点；AI 模型列表对齐 13 家官方最新版；修复自定义 API 刷新后全部 400、AI 请求无超时挂死、跨域图片题 100% 跳过、双 API 答案缓存写穿、思考型模型参数被拒）
 // @author       xu20060420fan-cell
-// @homepage     https://github.com/xu20060420fan-cell/xxt-course-helper
-// @supportURL   https://github.com/xu20060420fan-cell/xxt-course-helper/issues
+// @homepage     https://github.com/xu20060420fan-cell/chaoxing-auto-answer-script
+// @supportURL   https://github.com/xu20060420fan-cell/chaoxing-auto-answer-script/issues
 // @match        *://*/*
 // @grant        GM_addStyle
 // @grant        GM_setValue
@@ -45,35 +45,50 @@
     const IS_TOP_FRAME = (window.top === window.self);
 
     // ==================== 模型配置 ====================
-    // 2026-09 更新：以下模型名与端点均逐家对照官方文档核实过（OpenAI/Anthropic/Gemini 官方模型页、
-    // 千帆 v2 / 百炼 / Kimi 开放平台 / bigmodel / DeepSeek API docs / MiniMax / SenseNova / MiMo / 火山方舟）。
+    // 2026-10-21 更新：模型名与端点重新对照各家官方文档 / 公开模型目录核实。
+    //   OpenAI    : gpt-6.1-sol / gpt-6-astra / gpt-6-sol / gpt-6-luna / gpt-5.6-sol / gpt-5.6-terra
+    //   Anthropic : claude-opus-5-5 / claude-sonnet-5-5 / claude-haiku-5-5 / claude-fable-5-1
+    //   Gemini    : gemini-4-argon / gemini-3.8-flash / gemini-3.7-flash
+    //   千帆      : ernie-5.1 / ernie-5.0 / ernie-x1-turbo / ernie-4.5-turbo-128k
+    //   百炼      : qwen3.8-max / qwen3.8-flash / qwen3.8-omni-flash
+    //   Kimi      : kimi-k3 / kimi-k2.6
+    //   智谱      : glm-5.3 / glm-5.3-flash / glm-5.2
+    //   DeepSeek  : deepseek-v4.1-flash / deepseek-v4-pro / deepseek-v4-flash
+    //   MiniMax   : MiniMax-M3.1-Flash / MiniMax-M3 / MiniMax-M2.7 / MiniMax-M2.7-highspeed
+    //   日日新    : sensenova-6.7-flash-lite
+    //   MiMo      : mimo-v2.6-pro / mimo-v2.6-flash / mimo-v2.5-pro / mimo-v2.5
+    //   火山方舟  : doubao-seed-2.0-pro / doubao-seed-2.0-mini / doubao-seed-2.0-lite / doubao-seed-1.6
     // supportsImages: 该 API 是否支持图片题目（多模态）；isOpenAI: OpenAI 官方接口需用 max_completion_tokens
+    // isReasoning: 思考型模型 —— 不下发 temperature，且 max_tokens 留足（思维链也计入）
+    //   （2026-10 实锤：MiMo 思考模式固定 temperature=1.0 / top_p=0.95；DeepSeek-V4-Pro 官方卡推荐 temperature=1.0）
     const AI_MODELS = {
         openai: {
             name: 'OpenAI GPT',
             baseURL: 'https://api.openai.com/v1/chat/completions',
-            models: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
-            defaultModel: 'gpt-5.6-sol',
+            models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra'],
+            defaultModel: 'gpt-6.1-sol',
             apiKey: '',
             enabled: false,
             supportsImages: true,
-            isOpenAI: true
+            isOpenAI: true,
+            isReasoning: true
         },
         anthropic: {
             name: 'Anthropic Claude',
             baseURL: 'https://api.anthropic.com/v1/messages',
-            models: ['claude-opus-5', 'claude-sonnet-5', 'claude-fable-5-1', 'claude-haiku-4-5'],
-            defaultModel: 'claude-sonnet-5',
+            models: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-1'],
+            defaultModel: 'claude-sonnet-5-5',
             apiKey: '',
             enabled: false,
             isAnthropic: true,
-            supportsImages: true
+            supportsImages: true,
+            isReasoning: true
         },
         google: {
             name: 'Google Gemini',
             baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
-            models: ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3-flash'],
-            defaultModel: 'gemini-3.8-flash',
+            models: ['gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash'],
+            defaultModel: 'gemini-4-argon',
             apiKey: '',
             enabled: false,
             supportsImages: true
@@ -81,7 +96,7 @@
         baidu: {
             name: '百度文心（千帆v2）',
             baseURL: 'https://qianfan.baidubce.com/v2/chat/completions',
-            models: ['ernie-5.1', 'ernie-5.0', 'ernie-4.5-turbo-128k'],
+            models: ['ernie-5.1', 'ernie-5.0', 'ernie-x1-turbo', 'ernie-4.5-turbo-128k'],
             defaultModel: 'ernie-5.1',
             apiKey: '',
             enabled: false,
@@ -90,7 +105,7 @@
         aliyun: {
             name: '阿里通义千问',
             baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
-            models: ['qwen3.8-max', 'qwen3.8-flash', 'qwen3.7-plus'],
+            models: ['qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-omni-flash'],
             defaultModel: 'qwen3.8-max',
             apiKey: '',
             enabled: false,
@@ -103,7 +118,8 @@
             defaultModel: 'kimi-k3',
             apiKey: '',
             enabled: false,
-            supportsImages: true
+            supportsImages: true,
+            isReasoning: true
         },
         zhipu: {
             name: '智谱 GLM',
@@ -112,21 +128,23 @@
             defaultModel: 'glm-5.3',
             apiKey: '',
             enabled: false,
-            supportsImages: true
+            supportsImages: true,
+            isReasoning: true
         },
         deepseek: {
             name: 'DeepSeek',
             baseURL: 'https://api.deepseek.com/v1/chat/completions',
-            models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
-            defaultModel: 'deepseek-v4-flash',
+            models: ['deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash'],
+            defaultModel: 'deepseek-v4.1-flash',
             apiKey: '',
             enabled: false,
-            supportsImages: false
+            supportsImages: false,
+            isReasoning: true
         },
         minimax: {
             name: 'MiniMax',
             baseURL: 'https://api.minimaxi.com/v1/chat/completions',
-            models: ['MiniMax-M3', 'MiniMax-M2.7', 'MiniMax-M2.7-highspeed'],
+            models: ['MiniMax-M3.1-Flash', 'MiniMax-M3', 'MiniMax-M2.7', 'MiniMax-M2.7-highspeed'],
             defaultModel: 'MiniMax-M3',
             apiKey: '',
             enabled: false,
@@ -144,20 +162,22 @@
         xiaomi: {
             name: '小米 MiMo',
             baseURL: 'https://api.xiaomimimo.com/v1/chat/completions',
-            models: ['mimo-v2.5-pro', 'mimo-v2.5'],
-            defaultModel: 'mimo-v2.5-pro',
+            models: ['mimo-v2.6-pro', 'mimo-v2.6-flash', 'mimo-v2.5-pro', 'mimo-v2.5'],
+            defaultModel: 'mimo-v2.6-pro',
             apiKey: '',
             enabled: false,
-            supportsImages: true
+            supportsImages: true,
+            isReasoning: true
         },
         doubao: {
             name: '字节豆包',
             baseURL: 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
-            models: ['doubao-seed-2.0-pro', 'doubao-seed-2.0-mini', 'doubao-seed-1.6'],
+            models: ['doubao-seed-2.0-pro', 'doubao-seed-2.0-mini', 'doubao-seed-2.0-lite', 'doubao-seed-1.6'],
             defaultModel: 'doubao-seed-2.0-pro',
             apiKey: '',
             enabled: false,
-            supportsImages: true
+            supportsImages: true,
+            isReasoning: true
         },
         custom: {
             name: '自定义 API',
@@ -1191,7 +1211,12 @@
      */
     function isStudyInterface() {
         const pathname = String(location.pathname || '').toLowerCase();
-        return pathname.indexOf('/mycourse/studentstudy') === 0 ||
+        // 学习通现在把学习页挂在带前缀的路径上：/mooc-ans/mycourse/studentstudy、
+        // /mooc2-ans/mycourse/studentstudy（新版超星路由），旧版才是 /mycourse/studentstudy。
+        // 修复（2026-10-21 真机核验）：原来用 indexOf(...) === 0 锚定匹配，
+        // 遇到 mooc-ans / mooc2-ans 前缀直接判为"非刷课界面"→ 整个刷课功能静默不启动。
+        // 现改为「路径中包含 /mycourse/studentstudy」，与 OCS 5.2.1 的判断口径一致。
+        return /\/mycourse\/studentstudy/.test(pathname) ||
                /\/knowledge\/cards/.test(pathname) ||
                /\/ananas\/modules\//.test(pathname);
     }
@@ -2062,7 +2087,15 @@
                 name: cfg.name,
                 models: cfg.models,
                 isCustom: cfg.isCustom,
-                useApiKeyHeader: cfg.useApiKeyHeader || false
+                useApiKeyHeader: cfg.useApiKeyHeader || false,
+                // 修复（2026-10）：自定义 API 的协议 / 能力开关也要落盘，
+                // 否则刷新页面后 supportsImages / isAnthropic / isOpenAI 全部丢失，
+                // 行为漂移（图片题被拒、或 Anthropic 端点被当 OpenAI 兼容层发出去 → 400/401）。
+                protocol: cfg.protocol || 'openai',
+                supportsImages: cfg.supportsImages === true,
+                isOpenAI: cfg.isOpenAI === true,
+                isAnthropic: cfg.isAnthropic === true,
+                isReasoning: typeof cfg.isReasoning === 'boolean' ? cfg.isReasoning : undefined
             };
         }
         return apis;
@@ -2200,15 +2233,26 @@
                     }
                     // 如果是自定义 API
                     else if (saved.isCustom) {
+                        const savedModel = saved.model || (saved.models && saved.models[0]) || '';
                         AI_MODELS[id] = {
                             name: saved.name || '自定义 API',
                             baseURL: saved.baseURL || '',
                             models: saved.models || [],
-                            defaultModel: saved.model || (saved.models && saved.models[0]) || '',
+                            defaultModel: savedModel,
+                            // 修复（2026-10）：原来只写进 defaultModel，漏了 model。
+                            // 请求体用的是 api.model → undefined → JSON.stringify 直接丢键
+                            // → 请求体里根本没有 model 字段 → 刷新页面后每次调用都被 400 拒绝，
+                            // 界面却只显示"网络异常"，几乎无法定位。
+                            model: savedModel,
                             apiKey: saved.apiKey || '',
                             enabled: saved.enabled || false,
                             isCustom: true,
-                            useApiKeyHeader: saved.useApiKeyHeader || false
+                            useApiKeyHeader: saved.useApiKeyHeader || false,
+                            // 能力开关一并恢复，避免刷新/编辑后行为漂移
+                            supportsImages: saved.supportsImages === true,
+                            isOpenAI: saved.isOpenAI === true,
+                            isAnthropic: saved.isAnthropic === true,
+                            isReasoning: typeof saved.isReasoning === 'boolean' ? saved.isReasoning : undefined
                         };
                     }
                 }
@@ -2670,9 +2714,21 @@
                 const qType = detectQuestionType(question);
                 fillAnswer(question.element, answer1, qType);
                 state.answeredCount++;
+                // 修复（2026-10）：双 API 模式全程 bypassCache，缓存既不读也不写，
+                // 答案一致时手动补写一条，避免下次重复调用两家 API 浪费额度。
+                if (!question.isImageQuestion && state.settings.useCache) {
+                    try {
+                        state.questionCache.set(`q${question.index}_${hashString(question.cleanText)}`, { answer: answer1, ok: true });
+                    } catch (e) {}
+                }
             } else {
                 // 答案不一致或不确定，跳过
-                addLog('答案不一致或不确定，跳过此题', 'warn');
+                // 修复（2026-10）：第二个 API 的答案已被明确否决，必须把该题缓存清掉，
+                // 否则关掉双 API 模式后，这一题会命中缓存并把被否决的答案填进表单。
+                try {
+                    state.questionCache.delete(`q${question.index}_${hashString(question.cleanText)}`);
+                } catch (e) {}
+                addLog('答案不一致或不确定，跳过此题（已清除该题缓存）', 'warn');
             }
         } catch (err) {
             addLog(`双API对比失败: ${err.message}`, 'error');
@@ -2686,12 +2742,24 @@
         const api = AI_MODELS[state.selectedAPIId];
         if (!api || !api.apiKey) throw new Error('未选择或未配置 API');
 
-        addLog(`调用 ${api.name} [${api.model}]...`, 'info');
+        // 修复（2026-10）：恢复的自定义 API 曾经丢失 model 字段 → 请求体里没有 model
+        // → 每次调用都被 OpenAI 兼容层以 400 拒绝，而界面只显示"网络异常"，极难定位。
+        // 这里做一次兜底解析，缺模型时给出明确提示。
+        const modelName = resolveModelName(api);
+        if (!modelName) {
+            throw new Error(`${api.name} 未选择模型，请在设置里选择模型后点"校验并启用"`);
+        }
+        if (!api.model) api.model = modelName;
+
+        addLog(`调用 ${api.name} [${modelName}]...`, 'info');
 
         // 图片题目路由到不支持视觉的 API 时直接报错跳过，
-        // 避免模型在看不到图片的情况下凭空编一个选项字母
-        if (images && images.length > 0 && api.supportsImages === false) {
-            throw new Error(`${api.name} 不支持图片题目，请在设置中切换支持视觉的 API`);
+        // 避免模型在看不到图片的情况下凭空编一个选项字母。
+        // 修复（2026-10）：原来用 === false 严格判断，自定义 API 没有该字段（值为 undefined）时
+        // 守卫整个失效，图片被硬塞给纯文本模型 → 要么 400，要么模型瞎猜选项字母。
+        // 现在按"未显式声明支持就不支持"处理。
+        if (images && images.length > 0 && api.supportsImages !== true) {
+            throw new Error(`${api.name} 未声明支持图片题目，请在设置中勾选"支持图片"或切换支持视觉的 API`);
         }
 
         if (api.isAnthropic) {
@@ -2701,20 +2769,44 @@
         return callOpenAICompat(api, prompt, images);
     }
 
+    // 思考型模型判定
+    // 1) 供应商级别显式声明 isReasoning（true / false）优先
+    // 2) 否则按模型名正则兜底
+    // 思考型模型不接受自定义 temperature：MiMo 官方明确思考模式固定 temperature=1.0 / top_p=0.95，
+    // DeepSeek-V4-Pro 官方模型卡也推荐 temperature=1.0；下发 temperature=0.1 轻则被忽略、
+    // 重则直接 400。且思维链也计入 max_tokens，需要留足余量，否则正文在输出前就被截断。
+    const REASONING_MODEL_RE = /^(gpt-5|gpt-6|o1|o3|claude-(?:opus|sonnet|haiku|fable)-5|glm-5|deepseek-v4|kimi-k3|mimo-v2\.6|qwen3\.8|doubao-seed-2\.0-pro|ernie-x1)/i;
+    function isReasoningModel(api) {
+        if (typeof api.isReasoning === 'boolean') return api.isReasoning;
+        return REASONING_MODEL_RE.test(String((api && (api.model || api.defaultModel)) || ''));
+    }
+
+    // 取当前生效的模型名：model → defaultModel → models[0] 逐级兜底
+    function resolveModelName(api) {
+        if (!api) return '';
+        const m = api.model || api.defaultModel || (Array.isArray(api.models) && api.models[0]) || '';
+        return String(m);
+    }
+
     // 构造 OpenAI 兼容请求体
-    // OpenAI 官方接口的思考类模型（gpt-5.x 系列）不支持 max_tokens / 自定义 temperature，
+    // OpenAI 官方接口的思考类模型（gpt-5.x / gpt-6.x 系列）不支持 max_tokens / 自定义 temperature，
     // 必须用 max_completion_tokens；其余厂商沿用 temperature + max_tokens，
-    // 思考型模型（deepseek-v4 / glm / doubao 等）的思维链也计入 max_tokens，故留足余量
+    // 思考型模型（deepseek-v4 / glm / doubao / kimi-k3 / mimo-v2.6 等）的思维链也计入 max_tokens，故留足余量
     function buildChatBody(api, content) {
         const body = {
-            model: api.model,
+            model: resolveModelName(api),
             messages: [
                 { role: 'system', content: SYSTEM_PROMPT },
                 { role: 'user', content: content }
             ]
         };
+        const reasoning = isReasoningModel(api);
         if (api.isOpenAI) {
-            body.max_completion_tokens = 1500;
+            // 推理 token 同样计入 max_completion_tokens，1500 偏紧，正文容易被截断
+            body.max_completion_tokens = reasoning ? 8000 : 1500;
+        } else if (reasoning) {
+            // 思考型模型不下发 temperature（部分厂商只接受 1.0，收到 0.1 直接 400）
+            body.max_tokens = 8000;
         } else {
             body.temperature = 0.1;
             body.max_tokens = 2000;
@@ -2759,19 +2851,37 @@
                 url: api.baseURL,
                 headers: headers,
                 data: JSON.stringify(buildChatBody(api, content)),
+                // 修复（2026-10）：原来既没有 timeout 也没有 ontimeout。
+                // Tampermonkey 未指定 timeout 时无限等待 → Promise 永不 settle
+                // → await callAI(...) 永久挂起，整条答题流水线卡死且没有任何日志，只能刷新页面。
+                timeout: 60000,
                 onload(res) {
                     try {
                         const d = JSON.parse(res.responseText);
-                        if (d.choices && d.choices[0]) {
-                            resolve(d.choices[0].message.content.trim());
+                        if (d.error) {
+                            reject(new Error(d.error.message || ('接口返回错误 ' + (d.error.code || ''))));
+                            return;
+                        }
+                        const ch = d.choices && d.choices[0];
+                        const msg = ch && ch.message;
+                        // 思考型模型被 max_tokens 截断时 content 可能是 null，正文落在 reasoning_content 里
+                        const txt = (msg && (msg.content != null ? msg.content : msg.reasoning_content)) || '';
+                        if (txt) {
+                            resolve(String(txt).trim());
+                        } else if (ch && ch.finish_reason === 'length') {
+                            reject(new Error('输出被 max_tokens 截断，请改用输出上限更大的模型'));
                         } else {
-                            reject(new Error(d.error?.message || '返回格式异常'));
+                            reject(new Error('返回格式异常'));
                         }
                     } catch(e) {
-                        reject(new Error('响应解析失败'));
+                        reject(new Error('响应解析失败：' + (e && e.message ? e.message : e)));
                     }
                 },
-                onerror() { reject(new Error('网络异常')); }
+                onerror(res) {
+                    const st = res && res.status;
+                    reject(new Error(st ? `网络异常（HTTP ${st}）` : '网络异常'));
+                },
+                ontimeout() { reject(new Error('请求超时（60s），请检查网络或换一家 API')); }
             });
         });
     }
@@ -2802,24 +2912,43 @@
                     'anthropic-version': '2023-06-01'
                 },
                 data: JSON.stringify({
-                    model: api.model,
-                    max_tokens: 1000,
+                    model: resolveModelName(api),
+                    // 修复（2026-10）：Claude 5 系列默认开启长思考，思维链也计入 max_tokens，
+                    // 原来的 1000 会让正文在输出前就被截断（finish_reason=length）。
+                    max_tokens: isReasoningModel(api) ? 8000 : 2000,
                     system: SYSTEM_PROMPT,
                     messages: [{ role: 'user', content: userContent }]
                 }),
+                // 修复（2026-10）：补 timeout / ontimeout，避免连接挂起导致流水线永久卡死
+                timeout: 60000,
                 onload(res) {
                     try {
                         const d = JSON.parse(res.responseText);
-                        if (d.content && d.content[0]) {
-                            resolve(d.content[0].text.trim());
+                        if (d.error) {
+                            reject(new Error(d.error.message || ('接口返回错误 ' + (d.error.code || ''))));
+                            return;
+                        }
+                        // 原实现只取 content[0].text，遇到 type:'thinking' 块就拿到 undefined。
+                        // 改为把所有 type==='text' 的块拼起来。
+                        const text = Array.isArray(d.content)
+                            ? d.content.filter(b => b && b.type === 'text' && b.text).map(b => b.text).join('\n')
+                            : '';
+                        if (text) {
+                            resolve(text.trim());
+                        } else if (d.stop_reason === 'max_tokens') {
+                            reject(new Error('输出被 max_tokens 截断，请改用输出上限更大的模型'));
                         } else {
-                            reject(new Error(d.error?.message || '返回格式异常'));
+                            reject(new Error('返回格式异常'));
                         }
                     } catch(e) {
-                        reject(new Error('响应解析失败'));
+                        reject(new Error('响应解析失败：' + (e && e.message ? e.message : e)));
                     }
                 },
-                onerror() { reject(new Error('网络异常')); }
+                onerror(res) {
+                    const st = res && res.status;
+                    reject(new Error(st ? `网络异常（HTTP ${st}）` : '网络异常'));
+                },
+                ontimeout() { reject(new Error('请求超时（60s），请检查网络或换一家 API')); }
             });
         });
     }
@@ -2828,6 +2957,10 @@
     // ==================== 图片处理工具函数 ====================
 
     // 将图片转换为base64
+    // 修复（2026-10）：canvas.toDataURL() 在跨域图片上会抛 SecurityError（画布被污染），
+    // 而学习通题目图多在 p.ananas.chaoxing.com（与 chaoxing.com 不同源，子域≠同源），
+    // 且 <img> 通常早已 complete=true → 走的正是必失败的分支 → 图片题 100% 被静默跳过。
+    // 现在优先用 GM_xmlhttpRequest 跨域取图（@connect * 已授权），失败再回落 canvas。
     function imageToBase64(imgElement) {
         return new Promise((resolve, reject) => {
             const canvas = document.createElement('canvas');
@@ -2848,6 +2981,32 @@
         });
     }
 
+    // 通过 GM_xmlhttpRequest 下载图片并转 base64（跨域可用）
+    function imageToBase64ViaGM(src) {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: src,
+                responseType: 'blob',
+                timeout: 15000,
+                onload(res) {
+                    if (res.status < 200 || res.status >= 300) {
+                        reject(new Error('HTTP ' + res.status));
+                        return;
+                    }
+                    const blob = res.response;
+                    if (!blob) { reject(new Error('空响应')); return; }
+                    const fr = new FileReader();
+                    fr.onload = () => resolve(fr.result);
+                    fr.onerror = () => reject(new Error('读取失败'));
+                    fr.readAsDataURL(blob);
+                },
+                onerror() { reject(new Error('网络异常')); },
+                ontimeout() { reject(new Error('图片下载超时')); }
+            });
+        });
+    }
+
     // 获取题目区域内的所有图片
     async function extractImagesFromElement(element) {
         const images = element.querySelectorAll('img');
@@ -2861,28 +3020,38 @@
 
             // 跳过svg图标
             const src = img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy-src');
-            if (src && src.includes('.svg')) continue;
-
-            try {
-                // 如果图片已经加载完成
-                if (img.complete && img.naturalWidth > 0) {
-                    const base64 = await imageToBase64(img);
-                    base64Images.push(base64);
-                } else if (src) {
-                    // 图片还没加载，尝试创建新的img元素加载
-                    const newImg = new Image();
-                    newImg.crossOrigin = 'anonymous';
-                    await new Promise((resolve, reject) => {
-                        newImg.onload = resolve;
-                        newImg.onerror = reject;
-                        newImg.src = src;
-                    });
-                    const base64 = await imageToBase64(newImg);
-                    base64Images.push(base64);
-                }
-            } catch (e) {
-                console.warn('[AnswerAssistant] 图片转换失败:', e);
+            if (!src) continue;
+            if (src.includes('.svg')) continue;
+            // 已经是 data: URL 的直接用
+            if (src.startsWith('data:')) {
+                base64Images.push(src);
+                continue;
             }
+
+            let base64 = null;
+            // 首选：GM 跨域取图（对 p.ananas.chaoxing.com 等跨域图有效）
+            try {
+                base64 = await imageToBase64ViaGM(src);
+            } catch (e) {
+                // 回落：canvas 路径（同源图可用）
+                try {
+                    if (img.complete && img.naturalWidth > 0) {
+                        base64 = await imageToBase64(img);
+                    } else {
+                        const newImg = new Image();
+                        newImg.crossOrigin = 'anonymous';
+                        await new Promise((resolve, reject) => {
+                            newImg.onload = resolve;
+                            newImg.onerror = reject;
+                            newImg.src = src;
+                        });
+                        base64 = await imageToBase64(newImg);
+                    }
+                } catch (e2) {
+                    console.warn('[AnswerAssistant] 图片转换失败:', src, e2);
+                }
+            }
+            if (base64) base64Images.push(base64);
         }
 
         return base64Images;
@@ -3359,7 +3528,47 @@
             });
         }
 
-        return options;
+        return normalizeOptions(options);
+    }
+
+    // 选项规范化：按字母去重 + 把"只剩字母的标记元素"换成可点击的容器
+    // 2026-10-21 实机核验（超星学习通作业题真实 DOM）：
+    //   <li class="clearfix"><i class="fl">A、</i><a class="fl"><p><span>00090H</span>…</p></a></li>
+    // 原来 <li> 和 <i> 的 textContent 都以 "A、" 开头 → 同一个字母被收了两遍。
+    // 后果：① 给 AI 的选项表变成 A/A/B/B/C/C/D/D（其中一半内容为空），干扰模型；
+    //      ② 按文本相似度匹配答案时，可能命中只有字母的 <i>（点了等于没点，选项不会被选中）。
+    // 现在：同一字母只保留内容最完整的一条；内容为空时改用可点击的 li/label 容器。
+    function normalizeOptions(options) {
+        const byLetter = new Map();
+        for (const opt of options) {
+            if (!opt || !opt.letter) continue;
+            const content = (opt.text || '').replace(/^[A-Fa-f][\.、\)\s]*/, '').trim();
+            const prev = byLetter.get(opt.letter);
+            if (!prev) { byLetter.set(opt.letter, opt); continue; }
+            const prevContent = (prev.text || '').replace(/^[A-Fa-f][\.、\)\s]*/, '').trim();
+            // 保留内容更长（更完整）的那条
+            if (content.length > prevContent.length) byLetter.set(opt.letter, opt);
+        }
+        const out = [];
+        for (const [letter, opt] of byLetter) {
+            const content = (opt.text || '').replace(/^[A-Fa-f][\.、\)\s]*/, '').trim();
+            if (!content && opt.element && !opt.isInput) {
+                // 只有字母标记（<i>A、</i> 这类）→ 换成可点击的祖先容器
+                const host = opt.element.closest
+                    ? opt.element.closest('li, label, p, .clearfix, .option, .answer, .TiMu li')
+                    : null;
+                if (host) {
+                    const hostText = (host.textContent || '').trim();
+                    if (hostText) {
+                        out.push({ letter: letter, text: hostText, element: host, isInput: false });
+                        continue;
+                    }
+                }
+            }
+            out.push(opt);
+        }
+        out.sort((a, b) => String(a.letter).localeCompare(String(b.letter)));
+        return out;
     }
 
     // ==================== 选项文本相似度匹配（参考 OCS） ====================
@@ -4237,10 +4446,17 @@ async function startAutoAnswer() {
         if (q.isImageQuestion) {
             try {
                 images = await extractImagesFromElement(q.element);
-                if (images.length === 0) return null;
-                finalPrompt = '[图片题目] 请识别图片中的题目和选项，给出正确答案（只需输出选项字母，如A、B、C、D）';
             } catch (e) {
-                return null;
+                images = [];
+            }
+            if (images.length > 0) {
+                finalPrompt = '[图片题目] 请识别图片中的题目和选项，给出正确答案（只需输出选项字母，如A、B、C、D）';
+            } else {
+                // 修复（2026-10）：取图失败（跨域被拦 / 图片还没加载完）时不再整题放弃，
+                // 改为降级为"纯题干作答"——题干文字通常已包含选项文本；
+                // 原来这里直接 return null，会让这道题永远留空。
+                addLog('图片题目未能提取到图片，降级为纯文本作答', 'warn');
+                finalPrompt = '[图片题目] 未能读取到题目图片，请根据以下题干文字推断正确答案（只需输出选项字母，如A、B、C、D）';
             }
         }
 
@@ -4265,7 +4481,10 @@ async function startAutoAnswer() {
             if (!answer) return null;
 
             // 缓存答案（图片题目不缓存）- 注意：这里只缓存答案不缓存填写状态（getAnswerForQuestion不填写）
-            if (!q.isImageQuestion && state.settings.useCache) {
+            // 修复（2026-10）：bypassCache 只绕过了"读"，没绕过"写"。
+            // 双 API 对比里"判定为不一致 → 跳过"的题，缓存里留下的却是第二个 API 的答案；
+            // 之后关掉双 API 模式再答题，会把这份被明确否决的答案填进表单。复查流程同理。
+            if (!bypassCache && !q.isImageQuestion && state.settings.useCache) {
                 state.questionCache.set(cacheKey, { answer, ok: true });
             }
 
@@ -5849,6 +6068,27 @@ async function validateAPI(apiId) {
                                       placeholder="每行一个模型，如：&#10;model-name-1&#10;model-name-2" style="font-family:monospace;white-space:pre;overflow-x:auto;"></textarea>
                         </div>
 
+                        <div class="setting-item" style="flex-direction:column;align-items:flex-start;">
+                            <span class="setting-label" style="margin-bottom:8px;">接口协议</span>
+                            <select class="field-select" id="custom-api-protocol" style="width:100%;height:40px;">
+                                <option value="openai">OpenAI 兼容（绝大多数中转站 / 第三方）</option>
+                                <option value="openai-reasoning">OpenAI 官方（推理模型走 max_completion_tokens）</option>
+                                <option value="anthropic">Anthropic 原生（/v1/messages）</option>
+                            </select>
+                        </div>
+
+                        <div class="setting-item" style="flex-direction:column;align-items:flex-start;gap:6px;">
+                            <label class="setting-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
+                                <input type="checkbox" id="custom-api-supports-images"> 支持图片题目（多模态模型才勾）
+                            </label>
+                            <label class="setting-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
+                                <input type="checkbox" id="custom-api-reasoning"> 是思考型模型（不下发 temperature，输出上限留足）
+                            </label>
+                            <label class="setting-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
+                                <input type="checkbox" id="custom-api-apikey-header"> 使用 api-key 请求头（Azure OpenAI）
+                            </label>
+                        </div>
+
                         <div class="btn-row" style="margin-top:10px;">
                             <button class="btn btn-outline" id="btn-add-custom-api" style="flex:1">添加/更新自定义 API</button>
                             <button class="btn btn-outline" id="btn-edit-custom-api" style="flex:1;">编辑自定义 API</button>
@@ -6420,32 +6660,59 @@ async function validateAPI(apiId) {
                 return;
             }
 
-            // 生成唯一 ID
-            const customId = 'custom_' + Date.now();
+            const protocol = document.getElementById('custom-api-protocol')?.value || 'openai';
+            const supportsImages = !!document.getElementById('custom-api-supports-images')?.checked;
+            const isReasoning = !!document.getElementById('custom-api-reasoning')?.checked;
+            const useApiKeyHeader = !!document.getElementById('custom-api-apikey-header')?.checked;
 
-            // 添加到模型配置
+            // 修复（2026-10）：编辑流程以前是"先删旧条目、再让用户重新添加"，
+            // 但删除后立刻 saveAllConfig()，快照里已经没有该条目 → 用户还没点"添加"，
+            // 配置（含手输的 API Key）就已经被永久抹掉。改为原地替换，编辑全程无损。
+            const editingId = window.__editingCustomId;
+            const customId = editingId || ('custom_' + Date.now());
+
+            // 添加/更新到模型配置
             AI_MODELS[customId] = {
                 name: name,
                 baseURL: baseURL,
                 models: models,
                 defaultModel: models[0],
+                // 修复（2026-10）：必须同时写 model，否则刷新页面后请求体缺 model → 全部 400
+                model: models[0],
                 apiKey: apiKey,
                 enabled: true,
-                isCustom: true
+                isCustom: true,
+                protocol: protocol,
+                // 协议 → 请求层标记（自定义 API 指向 OpenAI 官方 / Anthropic 原生端点时必需）
+                isOpenAI: protocol === 'openai-reasoning',
+                isAnthropic: protocol === 'anthropic',
+                supportsImages: supportsImages,
+                // 勾选 → 思考型；未勾选 → 留 undefined，交给模型名正则兜底判断
+                isReasoning: isReasoning ? true : undefined,
+                useApiKeyHeader: useApiKeyHeader
             };
+            window.__editingCustomId = null;
 
             // 清空输入框
             document.getElementById('custom-api-name').value = '';
             document.getElementById('custom-api-baseurl').value = '';
             document.getElementById('custom-api-key').value = '';
             document.getElementById('custom-api-models').value = '';
+            const protoSel = document.getElementById('custom-api-protocol');
+            if (protoSel) protoSel.value = 'openai';
+            const imgBox = document.getElementById('custom-api-supports-images');
+            if (imgBox) imgBox.checked = false;
+            const reasonBox = document.getElementById('custom-api-reasoning');
+            if (reasonBox) reasonBox.checked = false;
+            const keyBox = document.getElementById('custom-api-apikey-header');
+            if (keyBox) keyBox.checked = false;
 
             // 重新渲染 API 列表
             renderAPIList();
             saveAllConfig();
 
-            showToast(`自定义 API "${name}" 已添加`, 'success');
-            addLog(`添加自定义 API: ${name}`, 'info');
+            showToast(`自定义 API "${name}" ${editingId ? '已更新' : '已添加'}`, 'success');
+            addLog(`${editingId ? '更新' : '添加'}自定义 API: ${name}`, 'info');
         });
 
         // 编辑自定义 API
@@ -6483,14 +6750,27 @@ async function validateAPI(apiId) {
             document.getElementById('custom-api-key').value = api.apiKey;
             document.getElementById('custom-api-models').value = (api.models || []).join('\n');
 
-            // 删除旧的，让用户重新添加
-            delete AI_MODELS[selectedId];
-            // 若当前使用的正是被删除的 API，清空选中状态
-            if (state.selectedAPIId === selectedId) state.selectedAPIId = null;
-            renderAPIList();
-            saveAllConfig();
+            // 修复（2026-10）：把协议 / 能力开关一起回填，并记住待替换的旧 ID。
+            // 原来这里是"立刻 delete + saveAllConfig()" → 用户只是点了"编辑"，
+            // API Key、baseURL、模型列表就已经被覆盖写没了（必须重新手输密钥），
+            // 而且 useApiKeyHeader（Azure）也会丢 → 请求头从 api-key 退回 Bearer → 401。
+            const protoSel = document.getElementById('custom-api-protocol');
+            if (protoSel) {
+                protoSel.value = api.isAnthropic ? 'anthropic'
+                    : (api.isOpenAI ? 'openai-reasoning' : 'openai');
+            }
+            const imgBox = document.getElementById('custom-api-supports-images');
+            if (imgBox) imgBox.checked = api.supportsImages === true;
+            const reasonBox = document.getElementById('custom-api-reasoning');
+            if (reasonBox) reasonBox.checked = api.isReasoning === true;
+            const keyBox = document.getElementById('custom-api-apikey-header');
+            if (keyBox) keyBox.checked = api.useApiKeyHeader === true;
 
-            showToast('已填充信息，请修改后点击"添加/更新"', 'info');
+            // 只标记待替换，不删除；等用户点"添加/更新"成功后原地替换
+            window.__editingCustomId = selectedId;
+            renderAPIList();
+
+            showToast('已填充信息，请修改后点击"添加/更新"（原配置不会被清除）', 'info');
         });
 
         document.getElementById('btn-clear-log').addEventListener('click', () => {
@@ -7120,6 +7400,11 @@ window.toggleApiBody = function(id) {
         // 否则会和"从第一个未完成开始播"的顺序逻辑互相抢播、来回切换
         userPickedJobid: null,
         userPickedAt: 0,
+        // 多视频顺序播放（2026-10-23 新增，修复"多个视频之间轮流播放 / 漏视频"）
+        mediaSeq: [],          // 本小节的视频任务点队列（按任务点顺序）
+        mediaSeqIndex: 0,     // 队列指针：播完一个才前进，只进不退
+        lastPlayedMedia: null, // 队列指针用：最近播完的那个视频
+        targetMedia: null,    // 当前唯一受保护的"目标视频"
         quizCheckedAt: 0,         // 上次检测题目任务点时间戳
         quizProcessing: false,    // 是否正在处理题目任务点
         stop() {
@@ -8401,9 +8686,11 @@ window.toggleApiBody = function(id) {
         if (videos.some(v => !v.paused && !v.ended)) return;
         // 统一决策：用户手动点过的视频优先（2026-09 修复多视频来回抢播）；
         // 用户点的还没就绪（readyState<2）时宁可等待，也不抢播前面的视频
+        try { advanceMediaSeq(); } catch (e) {}
         const pick = pickMediaToPlay(videos);
         if (!pick) return;
         const v = pick.media;
+        try { markTargetMedia(v); } catch (e) {}
         if (pick.reason === 'user' && (v.readyState || 0) < 2 && !v.ended) {
             return; // 等用户点的视频缓冲好，主循环每秒会再来
         }
@@ -8451,6 +8738,15 @@ window.toggleApiBody = function(id) {
             if (!found) {
                 try { if (window.top && window.top !== window) visit(window.top, 0); } catch (e) {}
             }
+            if (!found && !window.__aaAttachmentsWarned) {
+                // 修复（2026-10）：原来完全静默。平台一旦改版导致 attachments 取不到，
+                // 任务点状态判定会退化成 DOM 回退、刷课行为明显变形，却没有任何线索可查。
+                // 这里打一条 warn（每个 frame 只报一次，避免刷屏），便于下次真机校验时第一时间定位。
+                window.__aaAttachmentsWarned = true;
+                if (typeof addLog === 'function') {
+                    addLog('刷课: 未找到学习通 attachments（页面结构可能已变更），任务点状态判定已降级', 'warn');
+                }
+            }
             return found;
         } catch (e) { return null; }
     }
@@ -8492,6 +8788,10 @@ window.toggleApiBody = function(id) {
                 return aid !== undefined && String(aid) === String(jobid);
             });
             if (!att) return null;
+            // 修复（2026-10）：只判 job 会把"播过但平台侧未通过"（isPassed=false，如内嵌弹题没答、
+            // 观看校验没通过）误判成"已完成" → 脚本直接推进到下一节，平台侧该任务点仍算未完成，
+            // 课程进度留缺口。isPassed === false 时仍算未完成。
+            if (att.isPassed === false) return false;
             return !att.job;  // job=true → 未完成；job 消失（已完成/非任务点）→ true
         } catch (e) { return null; }
     }
@@ -8554,7 +8854,9 @@ window.toggleApiBody = function(id) {
                 const isMedia = (mod === 'insertvideo' || mod === 'insertaudio');
                 const isDoc = (mod === 'insertdoc' || mod === 'insertbook' || mod === 'insertflash');
                 if (!isMedia && !isDoc) continue;
-                if (!a.job) continue;  // 已完成（job 属性消失）或非任务点 → 不用刷
+                // 修复（2026-10）：isPassed === false（播过但平台侧未通过，如内嵌弹题没答）
+                // 仍然算未完成，不能跳过，否则平台侧进度留缺口。
+                if (!a.job && a.isPassed !== false) continue;  // 已完成（job 属性消失）或非任务点 → 不用刷
                 // 刚播完瞬间 attachments 可能未刷新（job 仍为 true），用 DOM ended 纠正
                 const jid = String(a.jobid || a.property._jobid || '');
                 if (isMedia && jid && endedJobs.has(jid)) continue;
@@ -8607,6 +8909,31 @@ window.toggleApiBody = function(id) {
         return info;
     }
 
+    // 用视频地址里的 objectid 精确对上 attachments 里的那个任务点
+    // 学习通视频地址形如：
+    //   https://s2.cldisk.com/sv-w2/video/03/f7/ca/<objectid>/sd.mp4
+    // 而 attachments[].property.objectid 正是这个哈希
+    //（平台自己的 mooc-ans/js/resource_scan.js 就是读 attachments[].property.objectid）
+    function attachmentForMedia(v) {
+        try {
+            const atts = getChaoxingAttachments();
+            if (!atts || !atts.length) return null;
+            const src = String(v.currentSrc || v.src || '').split('?')[0];
+            if (!src) return null;
+            const segs = src.split('/');
+            const cand = (segs.length >= 2 ? segs[segs.length - 2] : '').toLowerCase();
+            if (!cand || cand.length < 8) return null;
+            for (const a of atts) {
+                const aoid = String((a && a.property && a.property.objectid) || (a && a.objectid) || '').toLowerCase();
+                if (!aoid) continue;
+                if (aoid === cand) return a;
+                if (cand.length >= 16 && aoid.indexOf(cand) >= 0) return a;
+                if (aoid.length >= 16 && cand.indexOf(aoid) >= 0) return a;
+            }
+            return null;
+        } catch (e) { return null; }
+    }
+
     // 判断一个 video 元素对应的任务是否"已完成/非必做"（不用再刷）
     // 返回：true=已完成或非必做，false=未完成，null=无法判断（非超星页面等）
     // 作用：防止脚本反复重播平台上已标记完成的视频（DOM 里视频重新加载后 ended 是 false）
@@ -8616,8 +8943,45 @@ window.toggleApiBody = function(id) {
             const win = doc && doc.defaultView;
             const fe = win && win.frameElement;
             if (!fe) return null;  // 顶层视频，无卡片 data
-            return iframeJobDoneStatus(fe);
+            const st = iframeJobDoneStatus(fe);
+            if (st !== null) return st;
+            // 兜底1（2026-10-23）：按视频地址里的 objectid 精确匹配 attachments 里的任务点。
+            // 这样才能精确知道"当前这个视频是不是已经做完了"，
+            // 否则已完成视频会被重播、后面的视频也会被漏掉。
+            const att = attachmentForMedia(v);
+            if (att) {
+                if (att.isPassed === false) return false;  // 播过但平台侧未通过 → 仍算未完成
+                if (att.job) return false;                // job=true → 未完成
+                return true;                              // job 消失 → 已完成 / 非任务点
+            }
+            // 兜底2（2026-10-21 实机核验）：当前学习通的任务点 iframe 上没有 data 属性，
+            // readCardJobId 取不到 jobid → iframeJobDoneStatus 恒为 null，
+            // 于是"平台已标记完成的任务点"会被当成未完成 → 看完的视频被原地重播。
+            // 这里用平台自己的 attachments 兜底：若本章音视频任务点已全部完成，
+            // 就视作已完成。找不到 attachments / 本章没有音视频时返回 null（判不了 → 保守）。
+            const mediaState = attachmentsMediaState();
+            if (mediaState === false) return true;
+            return null;
         } catch (e) { return null; }
+    }
+
+    // 本章节附件里"还有没有未完成的音视频任务点"？
+    // 返回 true=还有未完成音视频；false=音视频已全部完成；null=判断不了
+    function attachmentsMediaState() {
+        const atts = getChaoxingAttachments();
+        if (!atts || !Array.isArray(atts) || atts.length === 0) return null;
+        let hasMedia = false;
+        let hasUnfinished = false;
+        for (const a of atts) {
+            if (!a) continue;
+            const mod = (a.property && a.property.module) || a.module || '';
+            if (mod !== 'insertvideo' && mod !== 'insertaudio') continue;
+            hasMedia = true;
+            // job=true → 未完成；isPassed===false → 播过但平台侧未通过，同样算未完成
+            if (a.job || a.isPassed === false) hasUnfinished = true;
+        }
+        if (!hasMedia) return null;
+        return hasUnfinished;
     }
 
     // ---------- 手动选择优先（2026-09 新增：修复多视频来回抢播） ----------
@@ -8656,6 +9020,92 @@ window.toggleApiBody = function(id) {
     // 统一的"该播哪个视频"决策：用户手动点过的优先，否则按卡片顺序第一个未完成的。
     // 返回 { media, reason: 'user'|'order' }；没有可播的返回 null。
     // 附带自愈：选中的视频已刷完 / 卡片已不在当前小节 → 清除记录，回落顺序模式。
+    // ============ 多视频顺序播放（2026-10-23） ============
+    // 用户实机反馈：一章里有多个视频时（例：红色歌曲 16 个任务点、经典视频 10 个），
+    // 脚本会在多个视频之间来回抢播（"轮流播放"），而且会漏视频。
+    // 真机复盘（学习通 knowledge/cards 是一个高 iframe，里面把整章任务点卡片全渲染出来，
+    // 每个卡片再套一层自己的 videojs 播放器）后定位到两个根因：
+    //   ① 选片逻辑"每轮都从 DOM 里挑第一个 paused 的视频"，完全不记进度
+    //      → 平台切到第 2 个之后，脚本下一轮又回到第 1 个；
+    //   ② pause 恢复 / iframe worker 会在"平台暂停旧视频、准备切下一个"的瞬间
+    //      把旧视频抢回来 → 平台再停掉新的 → 两个视频来回拉锯（真正在播的只有一个）。
+    // 解法：队列指针（只进不退）+ 目标互斥（同一时刻只有一个视频享受保护）。
+
+    // 两个视频列表是否完全相同（按元素身份比较）
+    function sameMediaList(a, b) {
+        if (!a || !b || a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+        return true;
+    }
+
+    // 视频的稳定标识：同一个任务点的视频地址（objectid）是固定的，
+    // 而 DOM 元素会被平台在切任务点时整体重建 → 只能用地址认人，不能用元素。
+    function mediaSig(v) {
+        try { return String(v.currentSrc || v.src || ''); } catch (e) { return ''; }
+    }
+
+    // 建立 / 刷新播放队列。平台重建卡片 DOM（视频元素被换掉）时，
+    // 按视频地址把指针对齐到同一个任务点 → 不会因为重建而跳回第一个视频。
+    function ensureMediaSeq(videos) {
+        if (!Array.isArray(videos)) return [];
+        if (!sameMediaList(_STUDY.mediaSeq, videos)) {
+            const old = Array.isArray(_STUDY.mediaSeq) ? _STUDY.mediaSeq : [];
+            const oldIdx = Math.min(_STUDY.mediaSeqIndex, Math.max(0, old.length - 1));
+            const anchor = old[oldIdx] || _STUDY.lastPlayedMedia || null;
+            const anchorSig = anchor ? mediaSig(anchor) : '';
+            _STUDY.mediaSeq = videos.slice();
+            let ni = -1;
+            if (anchorSig) {
+                for (let i = 0; i < _STUDY.mediaSeq.length; i++) {
+                    if (mediaSig(_STUDY.mediaSeq[i]) === anchorSig) { ni = i; break; }
+                }
+            }
+            // 地址对不上（平台换了源）→ 退化成按位置对齐，绝不回到 0
+            if (ni < 0) ni = Math.min(oldIdx, Math.max(0, _STUDY.mediaSeq.length - 1));
+            _STUDY.mediaSeqIndex = ni;
+        }
+        return _STUDY.mediaSeq;
+    }
+
+    // 把队列指针推进到"下一个还没播完的"（只进不退）
+    function advanceMediaSeq() {
+        const seq = Array.isArray(_STUDY.mediaSeq) ? _STUDY.mediaSeq : [];
+        if (!seq.length) return;
+        // 目标视频已播完 → 解除保护，避免各 iframe 的 worker 一直护着它
+        try { if (_STUDY.targetMedia && _STUDY.targetMedia.ended) markTargetMedia(null); } catch (e) {}
+        let guard = 0;
+        while (guard++ <= seq.length) {
+            const v = seq[_STUDY.mediaSeqIndex % seq.length];
+            if (!v) { _STUDY.mediaSeqIndex++; continue; }
+            if (v.ended || isVideoTaskDone(v) === true) {
+                _STUDY.lastPlayedMedia = v;
+                _STUDY.mediaSeqIndex++;
+                continue;
+            }
+            break;
+        }
+        if (_STUDY.mediaSeqIndex >= seq.length) _STUDY.mediaSeqIndex = 0;
+    }
+
+    // 标记"当前唯一要保护的目标视频"，写到顶层，供各 iframe 里的 worker 判断
+    function markTargetMedia(v) {
+        _STUDY.targetMedia = v || null;
+        try { window.top.__aa_targetMedia = v || null; } catch (e) {}
+    }
+
+    // 判断某个媒体元素是不是当前目标。
+    // 返回 false = 不是目标 → 一律不干预（让平台正常切任务点），这是防"轮流播放"的关键。
+    function isTargetMedia(v) {
+        try {
+            const top = window.top;
+            if (!top || top.__aa_targetMedia === undefined) return true; // 没有目标机制 → 保持旧行为
+            const t = top.__aa_targetMedia;
+            if (!t) return false;   // 目标还没定 / 已清空 → 谁都不保护
+            return t === v;
+        } catch (e) { return true; }
+    }
+
+    // 统一的"该播哪个视频"决策：用户手动点过的优先，否则按队列顺序。
     function pickMediaToPlay(videos) {
         if (_STUDY.userPickedJobid) {
             let picked = null;
@@ -8677,8 +9127,23 @@ window.toggleApiBody = function(id) {
                 _STUDY.userPickedJobid = null;  // 卡片已不在（换了小节/章节）→ 恢复顺序模式
             }
         }
+        // 顺序模式（2026-10-23）：按队列指针走，播完一个才播下一个，绝不回头。
+        // 旧逻辑是"每轮挑第一个 paused 的视频"，在一章多个视频时会来回跳、并漏掉后面的。
+        const seq = ensureMediaSeq(videos);
+        if (seq.length) {
+            for (let i = 0; i < seq.length; i++) {
+                const v = seq[(_STUDY.mediaSeqIndex + i) % seq.length];
+                if (!v) continue;
+                // 平台已标记完成的任务点绝不重播（判定不了时 isVideoTaskDone 返回 null，保守视为未完成）
+                if (isVideoTaskDone(v) === true) continue;
+                if (v.ended || !v.paused) continue;
+                if (!hasVideoSource(v)) continue;
+                return { media: v, reason: 'order' };
+            }
+            return null;
+        }
+        // 兜底：拿不到队列信息时退回旧逻辑
         for (const v of videos) {
-            // 平台已标记完成的任务点绝不重播（判定不了时 isVideoTaskDone 返回 null，保守视为未完成）
             if (isVideoTaskDone(v) === true) continue;
             if (v.ended || !v.paused) continue;
             if (!hasVideoSource(v)) continue;
@@ -8731,9 +9196,11 @@ window.toggleApiBody = function(id) {
     function playFirstUnfinishedVideo(logPrefix) {
         let videos = [];
         try { videos = findAllVideos(); } catch (e) { return false; }
+        try { advanceMediaSeq(); } catch (e) {}
         const pick = pickMediaToPlay(videos);
         if (!pick) return false;
         const v = pick.media;
+        try { markTargetMedia(v); } catch (e) {}
         try {
             if (v.videoWidth > 0 && v.videoWidth < 200) return false;  // 微缩占位视频
             if (v.videoHeight > 0 && v.videoHeight < 200) return false;
@@ -8831,9 +9298,16 @@ window.toggleApiBody = function(id) {
 
     // 章内小节推进：优先"下一节"，本章走完则跳下一个未完成章节
     function advanceSectionOrChapter() {
+        // 修复（2026-10）：全脚本其它跳转路径都会写 _STUDY.lastJumpAt（10s 防抖），
+        // 唯独"下一节"这条不写 → 主循环 1 秒调一次，attachments 异步刷新的窗口内
+        // 会连续点两次"下一节"，中间那一小节被整个跳过（进度留缺口且毫无提示）。
+        const now = Date.now();
+        if (now - (_STUDY.lastJumpAt || 0) < 10000) return false;
+
         const nextBtn = document.querySelector('#prevNextFocusNext');
         const visible = nextBtn && nextBtn.getBoundingClientRect && nextBtn.getBoundingClientRect().width > 0;
         if (visible) {
+            _STUDY.lastJumpAt = now;
             try { nextBtn.click(); } catch (e) {}
             scheduleAfterJump('section-next');
             return true;
@@ -8947,7 +9421,12 @@ window.toggleApiBody = function(id) {
             nodes.forEach(n => {
                 let unFinish = 0;
                 // 找显示未完成数的span
-                const unSpan = n.querySelector('.unfinish-num, .unfinished-num, .jobUnfinishCount, .num-unfinish');
+                // 2026-10 实机核验：学习通新版章节目录页（/mooc2-ans/mycourse/studentcourse）
+                // 用的是 <span class="catalog_points_yi">N</span> 表示该章未完成任务点数，
+                // 旧的 .unfinish-num / .jobUnfinishCount 只在学习页左侧目录（posCatalog）里存在。
+                // 之前缺了 .catalog_points_yi → 计数全部取不到 → 兜底"没icon=算未完成"
+                // → 每个章节都被当成未完成，"跳最早未完成章节"永远命中列表第一项。
+                const unSpan = n.querySelector('.unfinish-num, .unfinished-num, .jobUnfinishCount, .num-unfinish, .catalog_points_yi');
                 if (unSpan) {
                     unFinish = parseInt(unSpan.textContent.trim() || unSpan.value || '0') || 0;
                 } else {
@@ -9861,16 +10340,23 @@ window.toggleApiBody = function(id) {
         // 存到window以便停止时还原
         window._aa_orig_pause = origPause;
         HTMLMediaElement.prototype.pause = function() {
-            // 如果是反鼠标检测导致的暂停（不是用户主动暂停），拦截
+            // 用户主动暂停 → 正常暂停
             if (window._aa_user_intended_pause) {
                 return origPause.apply(this, arguments);
             }
-            // 否则静默（什么也不做）
-            // 但同时启动自动恢复
-            if (state.settings.studyAutoUnpause && this.paused === false) {
-                // 注意：pause 还没执行，但参数已到
+            // 关键修复（2026-10-23 实机复核：一章多个视频时来回横跳）：
+            // 平台"切任务点"时同样是先 pause 旧视频、再 play 新视频。
+            // 原来这里把 pause 整个吞掉（连 origPause 都不调用）→ 旧视频根本停不下来，
+            // 新旧两个视频同时播；脚本下一轮又按"第一个 paused 的视频"去挑 → 轮流播放。
+            // 现在只对"脚本当前的目标视频"做保护（那才是鼠标离开检测才会暂停的），
+            // 其它视频一律正常放行，让平台能正常切换任务点。
+            if (!isTargetMedia(this)) {
+                return origPause.apply(this, arguments);
             }
-            // 用 setTimeout 0 让 play 在 pause 之后执行
+            if (this.ended) {
+                return origPause.apply(this, arguments);
+            }
+            // 拦下这次暂停，并在下一拍恢复播放
             setTimeout(() => {
                 if (!this.ended && this.paused) {
                     this.play().catch(() => {});
@@ -9998,6 +10484,11 @@ window.toggleApiBody = function(id) {
             }
             // 已结束的视频不需要恢复
             if (this.ended) return;
+            // 多视频互斥（2026-10-23，修复"多个视频轮流播放"）：
+            // 只保护"脚本当前目标视频"的暂停。
+            // 其它视频被平台暂停 = 平台正在切任务点，这时抢回来就会和平台拉锯
+            // （旧视频被拉回→平台停新视频→再拉回旧视频→…），表现为视频之间轮流播。
+            if (!isTargetMedia(this)) return;
             // 平台已标记完成的任务点不恢复（防止重播已完成的视频）
             if (isVideoTaskDone(this) === true) return;
             // 多视频互斥（2026-09 修复来回抢播）：如果已有"另一个"媒体在播放，
@@ -10141,9 +10632,13 @@ window.toggleApiBody = function(id) {
             // 用户手动点过的优先；否则按卡片顺序第一个未完成的。
             // 用户点的还没缓冲好时 pickMediaToPlay 仍返回它，这里因无播放源/未就绪自然进入等待，
             // 绝不回头抢播前面的视频。
+            // 2026-10-23：先推进队列指针（只进不退），保证"第一个播完→第二个→第三个"。
+            advanceMediaSeq();
             const pick = pickMediaToPlay(videos);
             if (pick) {
                 const v = pick.media;
+                // 标记目标视频：只有它享受防暂停保护，其余视频的 pause 一律放行给平台
+                markTargetMedia(v);
                 const playable = !(v.ended || !v.paused || !hasVideoSource(v));
                 if (playable) {
                     let tiny = false;
@@ -10538,6 +11033,15 @@ window.toggleApiBody = function(id) {
     function setupStudyFrameWorker() {
         if (!isStudyPlatformHost()) return;
         const reportedEnded = new WeakSet();
+        // 初始化"目标视频"标记（2026-10-23）：
+        // 在顶层选定目标之前，谁都不享受防暂停保护。
+        // 否则整章 N 个播放器 iframe 的 worker 会同时开抢，把各自的视频拉回来互相打断
+        // → 表现为多个视频之间轮流播放、而且漏视频。
+        try {
+            if (window.top && window.top.__aa_targetMedia === undefined) {
+                window.top.__aa_targetMedia = false;
+            }
+        } catch (e) {}
 
         setInterval(() => {
             const cfg = readWorkerCfg();
@@ -10565,6 +11069,14 @@ window.toggleApiBody = function(id) {
                 } catch (e) {}
 
                 if (!running) continue;
+
+                // 多视频互斥（2026-10-23，修复"多个视频之间轮流播放"）：
+                // 学习通整章任务点的播放器 iframe 是同时存在的（knowledge/cards 是一个高 iframe，
+                // 里面把所有任务点卡片全渲染出来，每个卡片再套一层自己的 videojs），
+                // 所以这段防暂停逻辑会在 N 个 iframe 里各跑一份 —— 以前每个 worker 都想
+                // 把自己 iframe 里的视频拉回来 → N 个视频互相抢播、来回切换。
+                // 现在只有"顶层选定的目标视频"才享受保护，其它一律不碰。
+                if (!isTargetMedia(v)) continue;
 
                 // 防暂停：有播放源且已加载就自动恢复播放（尊重顶层的防暂停开关）
                 // 修复（2026-09）：worker 跑在播放器 iframe 里，以前不管任务点是否已完成都会恢复播放，
@@ -10605,6 +11117,8 @@ window.toggleApiBody = function(id) {
                 if (!ev.data || ev.data.source !== 'aa_study_worker' || ev.data.type !== 'video_ended') return;
             } catch (e) { return; }
             if (!_STUDY.running) return;
+            // 视频播完 → 队列指针前进（2026-10-23：严格按顺序播下一个，不回头）
+            try { advanceMediaSeq(); } catch (e) {}
             // 打破防抖，让切点立即执行
             _STUDY.lastJumpAt = 0;
             try { tryAutoJumpTask(); } catch (e) {}
