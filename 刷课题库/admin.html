@@ -40,6 +40,9 @@
 <header>
   <h1>🦐 刷课题库管理后台</h1>
   <span class="muted">命中阈值、题型分布见下方统计</span>
+  <input id="adminKey" type="password" placeholder="管理密钥 TIKU_ADMIN_KEY" autocomplete="off" style="max-width:260px">
+  <button class="ghost" onclick="setAdminKey($('adminKey').value)">应用密钥</button>
+  <span id="adminKeyTip" class="muted">未设置密钥 → 写接口会被拒绝（服务端未配置时全部禁用）</span>
 </header>
 <div class="stats" id="stats"></div>
 <main>
@@ -108,6 +111,20 @@
 let curPage = 1, pageSize = 50;
 const $ = id => document.getElementById(id);
 
+// ⚠ 2026-10-21：服务端写接口现在是 fail-closed 的（没配 TIKU_ADMIN_KEY 就禁用写入），
+//    所以后台必须能带上这个密钥。密钥只存在内存里，刷新即失效（不落 localStorage）。
+let adminKey = '';
+function authHeaders() {
+  return adminKey ? { 'x-admin-key': adminKey } : {};
+}
+function setAdminKey(v) {
+  adminKey = String(v || '').trim();
+  const box = $('adminKeyBox');
+  if (box) box.className = adminKey ? 'msg ok' : 'msg';
+  const tip = $('adminKeyTip');
+  if (tip) tip.textContent = adminKey ? '已带上密钥' : '未设置密钥 → 写接口会被拒绝（服务端未配置时全部禁用）';
+}
+
 function msg(id, ok, text) {
   const el = $(id);
   el.className = 'msg ' + (ok ? 'ok' : 'err');
@@ -147,7 +164,7 @@ async function doAdd() {
   if (!question || !answer) { msg('addMsg', false, '题干和答案必填'); return; }
   const optRaw = $('addOptions').value.trim();
   const options = optRaw ? optRaw.split('\n').map(l => { const m = l.match(/^([A-Fa-f])[\s\.、\)）:：]+(.+)$/); return m ? {letter:m[1].toUpperCase(), text:m[2].trim()} : null; }).filter(Boolean) : null;
-  const r = await fetch('/api/add', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ question, type:$('addType').value, options, answer }) }).then(x => x.json());
+  const r = await fetch('/api/add', { method:'POST', headers:Object.assign({'Content-Type':'application/json'}, authHeaders()), body:JSON.stringify({ question, type:$('addType').value, options, answer }) }).then(x => x.json());
   msg('addMsg', r.code === 1, r.code === 1 ? '已' + (r.action==='merge'?'合并':'新增') + '（id: '+r.id+'）' : (r.msg||'失败'));
   if (r.code === 1) { $('addQuestion').value=''; $('addOptions').value=''; $('addAnswer').value=''; loadStats(); loadList(curPage); }
 }
@@ -159,7 +176,7 @@ async function doImport() {
   let body;
   try { body = JSON.parse(text); if (!Array.isArray(body) && !body.items && !body.text) body = { text, format }; }
   catch(e) { body = { text, format }; }
-  const r = await fetch('/api/bulk', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) }).then(x => x.json());
+  const r = await fetch('/api/bulk', { method:'POST', headers:Object.assign({'Content-Type':'application/json'}, authHeaders()), body:JSON.stringify(body) }).then(x => x.json());
   msg('impMsg', r.code === 1, r.code === 1 ? `导入完成：新增 ${r.added}，合并 ${r.merged}，跳过 ${r.skipped}` : (r.msg||'失败'));
   if (r.code === 1) { loadStats(); loadList(1); }
 }
@@ -185,7 +202,7 @@ async function loadList(page) {
 
 async function doDel(id) {
   if (!confirm('确认删除该题？')) return;
-  const r = await fetch('/api/q/' + id, { method:'DELETE' }).then(x => x.json());
+  const r = await fetch('/api/q/' + id, { method:'DELETE', headers: authHeaders() }).then(x => x.json());
   if (r.code === 1) { loadStats(); loadList(curPage); }
 }
 
