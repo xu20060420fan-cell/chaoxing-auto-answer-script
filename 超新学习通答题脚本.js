@@ -3369,7 +3369,10 @@
                         options: options,
                         type: type,
                         answer: answer,
-                        source: '学习通判分自动沉淀'
+                        source: '学习通判分自动沉淀',
+                        // ⚠ clientId：服务端据此把题写进**用户自己的私有题库**，
+                        //   本人立刻就能查得到（不用等管理员审核），且别人的查询查不到。
+                        clientId: getPortalClientId()
                     });
                     if (ok) {
                         collectedStems.add(stem);
@@ -4773,10 +4776,13 @@ async function startAutoAnswer() {
             }
         } else {
             // 默认 tikuAdapter 协议
+            // ⚠ clientId：让服务端能查到**用户自己的私有题库**（脚本判分回写的题）。
+            //   服务端按 clientId 隔离，A 用户的私有池不会出现在 B 用户的查询结果里。
             dataObj = {
                 question: questionText,
                 options: optionsArr || [],
-                type: qType || ''
+                type: qType || '',
+                clientId: getPortalClientId()
             };
         }
 
