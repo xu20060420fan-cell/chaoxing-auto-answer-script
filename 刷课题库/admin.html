@@ -5,124 +5,320 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>刷课题库管理后台</title>
 <style>
-  :root { --bg:#0f172a; --panel:#1e293b; --border:#334155; --text:#e2e8f0; --muted:#94a3b8; --accent:#38bdf8; --ok:#10b981; --warn:#f59e0b; --err:#ef4444; }
-  * { box-sizing: border-box; }
+  :root {
+    --bg:#0f172a; --panel:#1e293b; --panel2:#172033; --border:#334155;
+    --text:#e2e8f0; --muted:#94a3b8; --accent:#38bdf8; --ok:#10b981;
+    --warn:#f59e0b; --err:#ef4444; --radius:10px;
+  }
+  * { box-sizing:border-box; }
   body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); }
-  header { padding:16px 24px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
-  header h1 { font-size:18px; margin:0; }
-  .stats { display:flex; gap:12px; flex-wrap:wrap; padding:16px 24px; }
-  .stat { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:12px 18px; }
-  .stat .n { font-size:22px; font-weight:700; color:var(--accent); }
-  .stat .l { font-size:12px; color:var(--muted); }
-  main { padding:0 24px 40px; }
-  .card { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:16px; }
-  .card h2 { font-size:14px; margin:0 0 12px; color:var(--accent); }
+  header { padding:14px 20px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:12px; flex-wrap:wrap; position:sticky; top:0; background:var(--bg); z-index:20; }
+  header h1 { font-size:17px; margin:0; white-space:nowrap; }
+  .grow { flex:1; min-width:160px; }
   input, textarea, select, button { font-family:inherit; font-size:13px; background:#0b1220; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; }
   textarea { width:100%; min-height:80px; resize:vertical; }
   button { cursor:pointer; background:var(--accent); color:#082032; font-weight:600; border:none; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
   button.ghost { background:transparent; border:1px solid var(--border); color:var(--text); }
   button.danger { background:var(--err); color:#fff; }
-  .row { display:flex; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
-  .grow { flex:1; min-width:200px; }
+  button.ok { background:var(--ok); color:#04231a; }
+  button.sm { padding:4px 9px; font-size:12px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); display:inline-block; }
+  .dot.on { background:var(--ok); box-shadow:0 0 6px var(--ok); }
+  .dot.off { background:var(--err); }
+  .stats { display:flex; gap:10px; flex-wrap:wrap; padding:14px 20px 0; }
+  .stat { background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:10px 16px; min-width:104px; }
+  .stat .n { font-size:21px; font-weight:700; color:var(--accent); }
+  .stat .l { font-size:12px; color:var(--muted); }
+  .stat.warn .n { color:var(--warn); }
+  .stat.ok .n { color:var(--ok); }
+  .tabs { display:flex; gap:4px; padding:14px 20px 0; flex-wrap:wrap; border-bottom:1px solid var(--border); }
+  .tab { padding:8px 14px; border:1px solid transparent; border-bottom:none; border-radius:8px 8px 0 0; cursor:pointer; color:var(--muted); font-size:13px; background:transparent; }
+  .tab.on { background:var(--panel); border-color:var(--border); color:var(--text); font-weight:600; }
+  .tab .badge { display:inline-block; min-width:17px; padding:0 5px; margin-left:5px; border-radius:9px; background:var(--warn); color:#2a1a00; font-size:11px; font-weight:700; text-align:center; }
+  main { padding:16px 20px 60px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:16px; }
+  .card h2 { font-size:13px; margin:0 0 12px; color:var(--accent); letter-spacing:.5px; }
+  .card h3 { font-size:13px; margin:16px 0 8px; color:var(--muted); }
+  .row { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; align-items:center; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
-  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
-  th { color:var(--muted); font-weight:600; }
+  th, td { text-align:left; padding:7px 9px; border-bottom:1px solid var(--border); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; white-space:nowrap; }
+  td.ops { white-space:nowrap; }
   .tag { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; background:#334155; }
+  .tag.ok { background:rgba(16,185,129,.22); color:var(--ok); }
+  .tag.warn { background:rgba(245,158,11,.2); color:var(--warn); }
+  .tag.err { background:rgba(239,68,68,.2); color:var(--err); }
   .score { color:var(--warn); font-weight:600; }
   .muted { color:var(--muted); }
-  .msg { padding:10px 12px; border-radius:6px; margin-bottom:10px; display:none; }
+  .msg { padding:9px 12px; border-radius:6px; margin-bottom:10px; display:none; }
   .msg.ok { background:rgba(16,185,129,.15); color:var(--ok); display:block; }
   .msg.err { background:rgba(239,68,68,.15); color:var(--err); display:block; }
   .code { font-family:ui-monospace,Consolas,monospace; }
+  .qtext { max-width:420px; }
+  .opt { font-size:12px; color:var(--muted); }
+  .wrap { overflow-x:auto; }
+  .hidden { display:none !important; }
+  .hint { font-size:12px; color:var(--muted); line-height:1.7; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; background:#334155; color:var(--muted); }
+  @media (max-width:720px) {
+    header { padding:10px 12px; }
+    .stats { padding:10px 12px 0; }
+    .stat { min-width:88px; padding:8px 12px; }
+    .tabs { padding:10px 12px 0; }
+    main { padding:12px 12px 50px; }
+    .qtext { max-width:200px; }
+    th, td { padding:6px 7px; }
+  }
 </style>
 </head>
 <body>
 <header>
   <h1>🦐 刷课题库管理后台</h1>
-  <span class="muted">命中阈值、题型分布见下方统计</span>
-  <input id="adminKey" type="password" placeholder="管理密钥 TIKU_ADMIN_KEY" autocomplete="off" style="max-width:260px">
-  <button class="ghost" onclick="setAdminKey($('adminKey').value)">应用密钥</button>
-  <span id="adminKeyTip" class="muted">未设置密钥 → 写接口会被拒绝（服务端未配置时全部禁用）</span>
+  <span id="svcDot" class="dot" title="服务状态"></span>
+  <span id="svcTip" class="muted">连接中…</span>
+  <span class="grow"></span>
+  <input id="adminKey" type="password" placeholder="管理密钥 TIKU_ADMIN_KEY" autocomplete="off" style="max-width:240px">
+  <button class="ghost sm" onclick="setAdminKey($('adminKey').value)">应用</button>
+  <button class="ghost sm" onclick="clearKey()">清除</button>
 </header>
+
 <div class="stats" id="stats"></div>
+
+<div class="tabs" id="tabs">
+  <div class="tab on" data-tab="pub" onclick="switchTab('pub')">公共池</div>
+  <div class="tab" data-tab="pool" onclick="switchTab('pool')">沉淀池审核<span class="badge hidden" id="poolBadge">0</span></div>
+  <div class="tab" data-tab="match" onclick="switchTab('match')">匹配测试</div>
+  <div class="tab" data-tab="imp" onclick="switchTab('imp')">导入</div>
+  <div class="tab" data-tab="src" onclick="switchTab('src')">远程源</div>
+</div>
+
 <main>
-  <div class="card">
-    <h2>搜索 / 匹配预览</h2>
-    <div class="row">
-      <input class="grow" id="searchInput" placeholder="输入题干，查看模糊匹配结果与分数（模拟脚本查询）">
-      <button onclick="doSearch()">搜索</button>
+  <!-- ══════════ 公共池 ══════════ -->
+  <section id="tab-pub">
+    <div class="card">
+      <h2>题目列表</h2>
+      <div class="row">
+        <input class="grow" id="listQ" placeholder="按题干关键字过滤" onkeydown="if(event.key==='Enter')loadPub(1)">
+        <select id="listType">
+          <option value="">全部题型</option>
+          <option value="单选题">单选题</option>
+          <option value="多选题">多选题</option>
+          <option value="判断题">判断题</option>
+          <option value="填空题">填空题</option>
+          <option value="简答题">简答题</option>
+        </select>
+        <button onclick="loadPub(1)">查询</button>
+        <button class="ghost" onclick="loadPub(1)">刷新</button>
+        <span class="grow"></span>
+        <button class="ghost sm" onclick="exportTiku('json')">导出 JSON</button>
+        <button class="ghost sm" onclick="exportTiku('csv')">导出 CSV</button>
+        <button class="ghost sm" onclick="exportTiku('tsv')">导出 TSV</button>
+      </div>
+      <div class="row" id="bulkBar">
+        <span class="muted" id="selCount">未选择</span>
+        <span class="grow"></span>
+        <button class="danger sm" onclick="bulkDeletePub()">删除选中</button>
+      </div>
+      <div id="listMeta" class="muted" style="margin-bottom:8px"></div>
+      <div class="wrap">
+        <table id="listTable">
+          <thead><tr>
+            <th style="width:28px"><input type="checkbox" onclick="toggleAllPub(this.checked)"></th>
+            <th>题干</th><th>题型</th><th>答案</th><th>选项</th><th>来源</th><th style="width:110px">操作</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost" id="prevBtn" onclick="loadPub(pubPage-1)">上一页</button>
+        <span id="pageInfo" class="muted"></span>
+        <button class="ghost" id="nextBtn" onclick="loadPub(pubPage+1)">下一页</button>
+      </div>
     </div>
-    <div id="searchResult" class="muted">输入关键词后显示结果。</div>
-  </div>
+  </section>
 
-  <div class="card">
-    <h2>新增单题</h2>
-    <div class="row">
-      <select id="addType">
-        <option value="单选题">单选题</option>
-        <option value="多选题">多选题</option>
-        <option value="判断题">判断题</option>
-        <option value="填空题">填空题</option>
-      </select>
-      <input class="grow" id="addAnswer" placeholder="答案：单选 A / 多选 ABD / 判断 对·错 / 填空 文本">
+  <!-- ══════════ 沉淀池 ══════════ -->
+  <section id="tab-pool" class="hidden">
+    <div class="card">
+      <h2>沉淀池（脚本自动回写，待审核）</h2>
+      <p class="hint">
+        脚本在<strong>已批阅的作业/考试页</strong>上读到平台给出的正确答案时会自动回写到这里。<br>
+        这里的内容<strong>不参与答题匹配</strong>（脏数据污染不到任何人），审核通过后才晋升到公共池。
+      </p>
+      <div class="row">
+        <button onclick="loadPool(1)">刷新</button>
+        <span class="grow"></span>
+        <span class="muted" id="poolSelCount">未选择</span>
+        <button class="ok sm" onclick="promotePool()">批准选中 → 公共池</button>
+        <button class="danger sm" onclick="rejectPool()">驳回选中（删除）</button>
+      </div>
+      <div id="poolMeta" class="muted" style="margin-bottom:8px"></div>
+      <div class="wrap">
+        <table id="poolTable">
+          <thead><tr>
+            <th style="width:28px"><input type="checkbox" onclick="toggleAllPool(this.checked)"></th>
+            <th>题干</th><th>题型</th><th>答案</th><th>选项</th><th>来源</th><th style="width:90px">操作</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost" onclick="loadPool(poolPage-1)">上一页</button>
+        <span id="poolPageInfo" class="muted"></span>
+        <button class="ghost" onclick="loadPool(poolPage+1)">下一页</button>
+      </div>
     </div>
-    <textarea id="addQuestion" placeholder="题干"></textarea>
-    <textarea id="addOptions" placeholder="选项（每行一个，如：A.选项一）" style="margin-top:8px"></textarea>
-    <div class="row" style="margin-top:10px">
-      <button onclick="doAdd()">提交</button>
-    </div>
-    <div class="msg" id="addMsg"></div>
-  </div>
+  </section>
 
-  <div class="card">
-    <h2>批量导入（去重合并）</h2>
-    <div class="row">
-      <select id="impFormat">
-        <option value="auto">自动识别</option>
-        <option value="tsv">TSV（题型	题目	选项	答案）</option>
-        <option value="json">JSON</option>
-        <option value="text">纯文本</option>
-      </select>
+  <!-- ══════════ 匹配测试 ══════════ -->
+  <section id="tab-match" class="hidden">
+    <div class="card">
+      <h2>匹配测试（模拟脚本的提问方式）</h2>
+      <p class="hint">直接调用 <code>POST /tiku</code>（tikuAdapter 协议）—— 和脚本实际请求的接口、参数格式完全一致。</p>
+      <div class="row">
+        <select id="mType" style="max-width:140px">
+          <option value="单选题">单选题</option>
+          <option value="多选题">多选题</option>
+          <option value="判断题">判断题</option>
+          <option value="填空题">填空题</option>
+          <option value="简答题">简答题</option>
+        </select>
+      </div>
+      <textarea id="mQuestion" placeholder="题干"></textarea>
+      <textarea id="mOptions" placeholder="选项（每行一个，不要写字母）" style="margin-top:8px;min-height:110px"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button onclick="doMatch()">查询</button>
+        <button class="ghost" onclick="doMatch(true)">带完整选项查</button>
+      </div>
+      <div class="msg" id="mMsg"></div>
+      <div id="mResult"></div>
     </div>
-    <textarea id="impText" placeholder="粘贴 TSV 表格 或 JSON 数组，格式与 seed/*.csv 一致"></textarea>
-    <div class="row" style="margin-top:10px">
-      <button onclick="doImport()">导入</button>
-    </div>
-    <div class="msg" id="impMsg"></div>
-  </div>
+  </section>
 
-  <div class="card">
-    <h2>题目列表</h2>
-    <div class="row">
-      <input class="grow" id="listQ" placeholder="按题干关键字过滤">
-      <button onclick="loadList(1)">查询</button>
-      <button class="ghost" onclick="loadList(1)">刷新</button>
+  <!-- ══════════ 导入 ══════════ -->
+  <section id="tab-imp" class="hidden">
+    <div class="card">
+      <h2>批量导入（去重合并）</h2>
+      <div class="row">
+        <select id="impFormat" style="max-width:200px">
+          <option value="auto">自动识别</option>
+          <option value="tsv">TSV（题型 题目 选项 答案）</option>
+          <option value="json">JSON 数组</option>
+          <option value="text">纯文本</option>
+        </select>
+        <input type="file" id="impFile" accept=".json,.csv,.tsv,.txt" onchange="onFilePicked()">
+        <button class="ghost" onclick="loadSample()">填入示例</button>
+      </div>
+      <textarea id="impText" placeholder="粘贴 TSV 表格 / JSON 数组，或选择本地文件" style="min-height:180px"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button onclick="doImport()">导入到公共池</button>
+        <span class="muted">同题干已有答案时不覆盖，只补空缺字段</span>
+      </div>
+      <div class="msg" id="impMsg"></div>
     </div>
-    <div id="listMeta" class="muted" style="margin-bottom:8px"></div>
-    <table id="listTable"><thead><tr><th>题干</th><th>题型</th><th>答案</th><th>命中</th><th></th></tr></thead><tbody></tbody></table>
-    <div class="row" style="margin-top:10px">
-      <button class="ghost" id="prevBtn" onclick="loadList(curPage-1)">上一页</button>
-      <span id="pageInfo" class="muted"></span>
-      <button class="ghost" id="nextBtn" onclick="loadList(curPage+1)">下一页</button>
+    <div class="card">
+      <h2>新增单题</h2>
+      <div class="row">
+        <select id="addType" style="max-width:140px">
+          <option value="单选题">单选题</option>
+          <option value="多选题">多选题</option>
+          <option value="判断题">判断题</option>
+          <option value="填空题">填空题</option>
+          <option value="简答题">简答题</option>
+        </select>
+        <input class="grow" id="addAnswer" placeholder="答案：单选 A / 多选 ABD / 判断 对·错 / 填空 文本">
+      </div>
+      <textarea id="addQuestion" placeholder="题干"></textarea>
+      <textarea id="addOptions" placeholder="选项（每行一个，如：A.选项一）" style="margin-top:8px"></textarea>
+      <div class="row" style="margin-top:10px"><button onclick="doAdd()">提交</button></div>
+      <div class="msg" id="addMsg"></div>
     </div>
-  </div>
+  </section>
+
+  <!-- ══════════ 远程源 ══════════ -->
+  <section id="tab-src" class="hidden">
+    <div class="card">
+      <h2>外部题库上游</h2>
+      <p class="hint">
+        题库查不到时，服务端会并发去这些上游找（多源并行 + 失败回退，不会卡死）。<br>
+        星夜题库：<a href="https://tiku888.top/" target="_blank" rel="noopener">tiku888.top</a> 注册后「个人中心 → 题库配置」复制 JSON。
+      </p>
+      <div class="wrap">
+        <table id="srcTable">
+          <thead><tr><th>名称</th><th>协议</th><th>地址</th><th>超时</th><th>状态</th><th style="width:110px">操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <h2>添加上游</h2>
+      <div class="row">
+        <input id="srcName" placeholder="名称，如 xingye" style="max-width:160px">
+        <select id="srcProto" style="max-width:160px">
+          <option value="tikuAdapter">tikuAdapter（通用）</option>
+          <option value="enncy">enncy</option>
+        </select>
+        <input class="grow" id="srcUrl" placeholder="接口地址 https://…">
+        <input id="srcToken" placeholder="token（可选）" style="max-width:180px">
+        <input id="srcTimeout" type="number" value="5000" style="max-width:110px" title="超时毫秒">
+      </div>
+      <div class="row">
+        <label class="muted"><input type="checkbox" id="srcEnabled" checked> 启用</label>
+        <button onclick="doAddSource()">添加</button>
+      </div>
+      <div class="msg" id="srcMsg"></div>
+    </div>
+  </section>
 </main>
-<script>
-let curPage = 1, pageSize = 50;
-const $ = id => document.getElementById(id);
 
-// ⚠ 2026-10-21：服务端写接口现在是 fail-closed 的（没配 TIKU_ADMIN_KEY 就禁用写入），
-//    所以后台必须能带上这个密钥。密钥只存在内存里，刷新即失效（不落 localStorage）。
-let adminKey = '';
+<script>
+/* ══════════════════════════════════════════════════════════════
+ * 基础
+ * ══════════════════════════════════════════════════════════════ */
+const $ = (id) => document.getElementById(id);
+
+/* 后端既能在 8091 直连访问，也能在 8080 网关的 /tiku-api 前缀下访问
+   （公网只放行了 8080，8091 出不去）。相对路径在两种情况下会打到不同的地方，
+   所以这里按当前路径推导 API 前缀，两种访问方式都能用。 */
+const API_BASE = (function () {
+  const p = location.pathname.replace(/\/+$/, '');
+  return p.endsWith('/tiku-api') ? '/tiku-api' : '';
+})();
+function api(p) { return API_BASE + p; }
+
+/* ⚠ 2026-10-24：服务端写接口是 fail-closed 的（没配 TIKU_ADMIN_KEY 就禁用写入），
+   而且 /api/q、/api/sources 这两个读接口现在也加了鉴权（原来公开可读，
+   等于把整个题库和上游 token 送人）。
+   密钥只存在 sessionStorage：刷新不丢，关掉标签页即失效，不落 localStorage。 */
+let adminKey = sessionStorage.getItem('tiku_admin_key') || '';
+
 function authHeaders() {
   return adminKey ? { 'x-admin-key': adminKey } : {};
 }
 function setAdminKey(v) {
   adminKey = String(v || '').trim();
-  const box = $('adminKeyBox');
-  if (box) box.className = adminKey ? 'msg ok' : 'msg';
-  const tip = $('adminKeyTip');
-  if (tip) tip.textContent = adminKey ? '已带上密钥' : '未设置密钥 → 写接口会被拒绝（服务端未配置时全部禁用）';
+  if (adminKey) sessionStorage.setItem('tiku_admin_key', adminKey);
+  else sessionStorage.removeItem('tiku_admin_key');
+  $('adminKey').value = adminKey;
+  refreshAll();
+}
+function clearKey() { setAdminKey(''); }
+
+async function req(path, opts = {}) {
+  const headers = Object.assign({}, opts.headers || {}, authHeaders());
+  if (opts.json !== false && opts.body) headers['Content-Type'] = 'application/json';
+  const res = await fetch(api(path), {
+    method: opts.method || 'GET',
+    headers,
+    body: opts.body ? (typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body)) : undefined,
+  });
+  let data = null;
+  try { data = await res.json(); } catch (e) { data = { code: 0, msg: 'HTTP ' + res.status }; }
+  if (res.status === 401 || res.status === 403) {
+    return { code: 0, msg: data && data.msg ? data.msg : ('需要管理密钥（HTTP ' + res.status + '）'), needKey: true };
+  }
+  return data;
 }
 
 function msg(id, ok, text) {
@@ -130,32 +326,308 @@ function msg(id, ok, text) {
   el.className = 'msg ' + (ok ? 'ok' : 'err');
   el.textContent = text;
 }
-
-async function loadStats() {
-  const r = await fetch('/api/stats').then(x => x.json());
-  if (r.code !== 1) return;
-  const byType = r.byType || {};
-  const tName = { single:'单选题', multi:'多选题', judge:'判断题', fill:'填空题', unknown:'未知' };
-  let html = `<div class="stat"><div class="n">${r.total}</div><div class="l">题库总量</div></div>`;
-  html += `<div class="stat"><div class="n">${r.withAnswer}</div><div class="l">有答案</div></div>`;
-  html += `<div class="stat"><div class="n">${r.minScore}</div><div class="l">命中阈值</div></div>`;
-  for (const k of Object.keys(byType)) {
-    html += `<div class="stat"><div class="n">${byType[k]}</div><div class="l">${tName[k]||k}</div></div>`;
-  }
-  $('stats').innerHTML = html;
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function optsText(options) {
+  if (!Array.isArray(options) || !options.length) return '';
+  return options.map(o => (typeof o === 'string' ? o : (o.text || o.value || ''))).join(' | ');
 }
 
-async function doSearch() {
-  const q = $('searchInput').value.trim();
-  if (!q) return;
-  const r = await fetch('/api/search?q=' + encodeURIComponent(q) + '&limit=20').then(x => x.json());
+/* ══════════════════════════════════════════════════════════════
+ * 统计 / 顶部状态
+ * ══════════════════════════════════════════════════════════════ */
+async function loadStats() {
+  const r = await req('/api/stats', { json: false });
+  const pool = await req('/api/pool/stats');
+  const src = await req('/api/sources');
+  const tName = { single: '单选题', multi: '多选题', judge: '判断题', fill: '填空题', unknown: '未知' };
+  let html = '';
+  if (r.code === 1) {
+    html += `<div class="stat"><div class="n">${r.total}</div><div class="l">公共池题目</div></div>`;
+    html += `<div class="stat ok"><div class="n">${r.withAnswer}</div><div class="l">有答案</div></div>`;
+    html += `<div class="stat"><div class="n">${r.minScore}</div><div class="l">命中阈值</div></div>`;
+    html += `<div class="stat ${r.llmEnabled ? 'ok' : ''}"><div class="n" style="font-size:15px">${r.llmEnabled ? '开' : '关'}</div><div class="l">服务端 LLM</div></div>`;
+    for (const k of Object.keys(r.byType || {})) {
+      html += `<div class="stat"><div class="n">${r.byType[k]}</div><div class="l">${tName[k] || k}</div></div>`;
+    }
+  }
+  const poolN = (pool && pool.code === 1) ? pool.pool : null;
+  if (poolN !== null) {
+    html += `<div class="stat ${poolN > 0 ? 'warn' : ''}"><div class="n">${poolN}</div><div class="l">沉淀池待审</div></div>`;
+    const badge = $('poolBadge');
+    badge.textContent = poolN;
+    badge.className = poolN > 0 ? 'badge' : 'badge hidden';
+  }
+  const srcN = (src && src.code === 1) ? Object.values(src.items || {}).filter(s => s && s.enabled).length : null;
+  if (srcN !== null) {
+    html += `<div class="stat"><div class="n">${srcN}</div><div class="l">启用的上游</div></div>`;
+  }
+  $('stats').innerHTML = html || '<div class="muted">统计不可用（可能还没连上服务）</div>';
+}
+
+async function ping() {
+  try {
+    const r = await req('/api/health', { json: false });
+    if (r && r.code === 1) {
+      $('svcDot').className = 'dot on';
+      $('svcTip').textContent = '服务在线 · 运行 ' + Math.round(r.uptime / 60) + ' 分钟';
+    } else throw new Error('bad');
+  } catch (e) {
+    $('svcDot').className = 'dot off';
+    $('svcTip').textContent = '服务不可达';
+  }
+}
+
+function refreshAll() {
+  ping();
+  loadStats();
+  if (currentTab === 'pub') loadPub(pubPage);
+  if (currentTab === 'pool') loadPool(poolPage);
+  if (currentTab === 'src') loadSources();
+}
+
+/* ══════════════════════════════════════════════════════════════
+ * Tab
+ * ══════════════════════════════════════════════════════════════ */
+let currentTab = 'pub';
+function switchTab(name) {
+  currentTab = name;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === name));
+  ['pub', 'pool', 'match', 'imp', 'src'].forEach(k => $('tab-' + k).classList.toggle('hidden', k !== name));
+  if (name === 'pub') loadPub(pubPage);
+  if (name === 'pool') loadPool(poolPage);
+  if (name === 'src') loadSources();
+}
+
+/* ══════════════════════════════════════════════════════════════
+ * 公共池
+ * ══════════════════════════════════════════════════════════════ */
+let pubPage = 1, pubSel = new Set();
+
+async function loadPub(page) {
+  pubPage = Math.max(1, page || 1);
+  const kw = $('listQ').value.trim();
+  const type = $('listType').value;
+  let url = `/api/q?page=${pubPage}&pageSize=50&q=${encodeURIComponent(kw)}`;
+  if (type) url += '&type=' + encodeURIComponent(type);
+  const r = await req(url);
+  if (r.needKey) { $('listMeta').textContent = '需要管理密钥'; return; }
   const items = r.items || [];
-  if (!items.length) { $('searchResult').innerHTML = '<span class="muted">无结果</span>'; return; }
-  $('searchResult').innerHTML = items.map(it =>
-    `<div style="padding:6px 0;border-bottom:1px solid var(--border)">
-      <span class="score">${it.score}</span> &nbsp; [${it.type||'未知'}] ${escapeHtml(it.question)}
-      <div class="muted">答案: <b>${escapeHtml(it.answer)}</b> ${it.source ? ' · 来源 '+escapeHtml(it.source) : ''}</div>
-    </div>`).join('');
+  $('listMeta').textContent = `共 ${r.total} 条，第 ${r.page} 页`;
+  $('pageInfo').textContent = `${r.page} / ${Math.max(1, Math.ceil(r.total / 50))}`;
+  $('prevBtn').disabled = r.page <= 1;
+  $('nextBtn').disabled = r.page * 50 >= r.total;
+  pubSel.clear();
+  $('listTable').querySelector('tbody').innerHTML = items.map(it =>
+    `<tr>
+      <td><input type="checkbox" class="pubck" value="${escapeHtml(it.id)}" onchange="togglePub('${escapeHtml(it.id)}',this.checked)"></td>
+      <td class="qtext">${escapeHtml(it.question)}</td>
+      <td><span class="tag">${escapeHtml(it.type || '未知')}</span></td>
+      <td class="code">${escapeHtml(it.answer)}</td>
+      <td class="opt">${escapeHtml(optsText(it.options))}</td>
+      <td><span class="pill">${escapeHtml(it.source || '-')}</span></td>
+      <td class="ops">
+        <button class="ghost sm" onclick="editPub('${escapeHtml(it.id)}')">改</button>
+        <button class="danger sm" onclick="delPub('${escapeHtml(it.id)}')">删</button>
+      </td>
+    </tr>`).join('') || '<tr><td colspan="7" class="muted">没有匹配的题目</td></tr>';
+  updateSelCount();
+}
+
+function togglePub(id, on) { if (on) pubSel.add(id); else pubSel.delete(id); updateSelCount(); }
+function toggleAllPub(on) {
+  pubSel.clear();
+  document.querySelectorAll('.pubck').forEach(cb => { cb.checked = on; if (on) pubSel.add(cb.value); });
+  updateSelCount();
+}
+function updateSelCount() { $('selCount').textContent = pubSel.size ? ('已选 ' + pubSel.size + ' 条') : '未选择'; }
+
+async function delPub(id) {
+  if (!confirm('确认从公共池删除该题？')) return;
+  const r = await req('/api/q/' + encodeURIComponent(id), { method: 'DELETE', json: false });
+  if (r.code === 1) { loadStats(); loadPub(pubPage); }
+  else alert(r.msg || '删除失败');
+}
+
+async function bulkDeletePub() {
+  if (!pubSel.size) { alert('先勾选要删除的题目'); return; }
+  if (!confirm('确认删除选中的 ' + pubSel.size + ' 道题？此操作不可撤销。')) return;
+  const r = await req('/api/q/bulk-delete', { method: 'POST', body: { ids: Array.from(pubSel) } });
+  if (r.code === 1) { alert('已删除 ' + r.removed + ' 道'); loadStats(); loadPub(pubPage); }
+  else alert(r.msg || '删除失败');
+}
+
+/* 编辑：把该行换成输入框 */
+let editingId = null;
+async function editPub(id) {
+  const r = await req('/api/q?pageSize=200');
+  const it = (r.items || []).find(x => x.id === id);
+  if (!it) { alert('取不到该题（可能不在前 200 条里）'); return; }
+  editingId = id;
+  const rows = document.querySelectorAll('#listTable tbody tr');
+  rows.forEach(tr => {
+    const cb = tr.querySelector('.pubck');
+    if (!cb || cb.value !== id) return;
+    tr.innerHTML = `
+      <td colspan="7">
+        <div class="row">
+          <select id="edType" style="max-width:130px">
+            ${['单选题', '多选题', '判断题', '填空题', '简答题'].map(t =>
+              `<option value="${t}"${t === it.type ? ' selected' : ''}>${t}</option>`).join('')}
+          </select>
+          <input class="grow" id="edAnswer" value="${escapeHtml(it.answer || '')}" placeholder="答案">
+        </div>
+        <textarea id="edQuestion" style="margin-top:6px">${escapeHtml(it.question || '')}</textarea>
+        <textarea id="edOptions" style="margin-top:6px;min-height:80px" placeholder="选项，每行一个">${escapeHtml(optsText(it.options))}</textarea>
+        <div class="row" style="margin-top:8px">
+          <button class="ok sm" onclick="saveEdit()">保存</button>
+          <button class="ghost sm" onclick="cancelEdit()">取消</button>
+        </div>
+      </td>`;
+  });
+}
+function cancelEdit() { editingId = null; loadPub(pubPage); }
+async function saveEdit() {
+  if (!editingId) return;
+  const question = $('edQuestion').value.trim();
+  const answer = $('edAnswer').value.trim();
+  if (!question || !answer) { alert('题干和答案必填'); return; }
+  const raw = $('edOptions').value.trim();
+  const options = raw ? raw.split('\n').map(l => {
+    const m = l.match(/^([A-Ha-h])[\s\.、\)）:：]+\s*(.+)$/);
+    return m ? { letter: m[1].toUpperCase(), text: m[2].trim() } : { letter: '', text: l.trim() };
+  }).filter(o => o.text) : null;
+  const r = await req('/api/q/' + encodeURIComponent(editingId), { method: 'PUT', body: { question, type: $('edType').value, options, answer } });
+  if (r.code === 1) { editingId = null; loadStats(); loadPub(pubPage); }
+  else alert(r.msg || '保存失败');
+}
+
+function exportTiku(format) {
+  if (!adminKey) { alert('导出需要管理密钥'); return; }
+  window.location.href = api('/api/export?format=' + encodeURIComponent(format));
+}
+
+/* ══════════════════════════════════════════════════════════════
+ * 沉淀池
+ * ══════════════════════════════════════════════════════════════ */
+let poolPage = 1, poolSel = new Set();
+
+async function loadPool(page) {
+  poolPage = Math.max(1, page || 1);
+  const r = await req(`/api/pool?page=${poolPage}&pageSize=50`);
+  if (r.needKey) { $('poolMeta').textContent = '需要管理密钥'; return; }
+  const items = r.items || [];
+  $('poolMeta').textContent = `共 ${r.total} 条待审，第 ${r.page} 页`;
+  $('poolPageInfo').textContent = `${r.page} / ${Math.max(1, Math.ceil(r.total / 50))}`;
+  poolSel.clear();
+  $('poolTable').querySelector('tbody').innerHTML = items.map(it =>
+    `<tr>
+      <td><input type="checkbox" class="poolck" value="${escapeHtml(it.id)}" onchange="togglePool('${escapeHtml(it.id)}',this.checked)"></td>
+      <td class="qtext">${escapeHtml(it.question)}</td>
+      <td><span class="tag">${escapeHtml(it.type || '未知')}</span></td>
+      <td class="code">${escapeHtml(it.answer)}</td>
+      <td class="opt">${escapeHtml(optsText(it.options))}</td>
+      <td><span class="pill">${escapeHtml(it.source || '-')}</span></td>
+      <td class="ops">
+        <button class="ok sm" onclick="promoteOne('${escapeHtml(it.id)}')">批准</button>
+        <button class="danger sm" onclick="rejectOne('${escapeHtml(it.id)}')">驳回</button>
+      </td>
+    </tr>`).join('') || '<tr><td colspan="7" class="muted">沉淀池是空的 —— 让脚本在已批阅的作业页上跑一次就会自动回写</td></tr>';
+  updatePoolSel();
+}
+function togglePool(id, on) { if (on) poolSel.add(id); else poolSel.delete(id); updatePoolSel(); }
+function toggleAllPool(on) {
+  poolSel.clear();
+  document.querySelectorAll('.poolck').forEach(cb => { cb.checked = on; if (on) poolSel.add(cb.value); });
+  updatePoolSel();
+}
+function updatePoolSel() { $('poolSelCount').textContent = poolSel.size ? ('已选 ' + poolSel.size + ' 条') : '未选择'; }
+
+async function promoteOne(id) {
+  const r = await req('/api/pool/promote', { method: 'POST', body: { ids: [id] } });
+  if (r.code === 1) { alert('已批准' + (r.added ? '（新增）' : '（合并）') + '，公共池现有 ' + r.total + ' 题'); loadStats(); loadPool(poolPage); }
+  else alert(r.msg || '批准失败');
+}
+async function rejectOne(id) {
+  if (!confirm('驳回并删除该条沉淀？')) return;
+  const r = await req('/api/pool/' + encodeURIComponent(id), { method: 'DELETE', json: false });
+  if (r.code === 1) { loadStats(); loadPool(poolPage); }
+  else alert(r.msg || '驳回失败');
+}
+async function promotePool() {
+  if (!poolSel.size) { alert('先勾选要批准的条目'); return; }
+  const r = await req('/api/pool/promote', { method: 'POST', body: { ids: Array.from(poolSel) } });
+  if (r.code === 1) {
+    alert('新增 ' + r.added + '，合并 ' + r.merged + (r.skipped ? '，跳过 ' + r.skipped + '（质量闸没过）' : '') + '，剩余待审 ' + r.poolTotal);
+    loadStats(); loadPool(poolPage);
+  } else alert(r.msg || '批准失败');
+}
+async function rejectPool() {
+  if (!poolSel.size) { alert('先勾选要驳回的条目'); return; }
+  if (!confirm('确认删除选中的 ' + poolSel.size + ' 条沉淀？')) return;
+  let n = 0;
+  for (const id of Array.from(poolSel)) {
+    const r = await req('/api/pool/' + encodeURIComponent(id), { method: 'DELETE', json: false });
+    if (r.code === 1) n++;
+  }
+  alert('已删除 ' + n + ' 条');
+  loadStats(); loadPool(poolPage);
+}
+
+/* ══════════════════════════════════════════════════════════════
+ * 匹配测试（模拟脚本）
+ * ══════════════════════════════════════════════════════════════ */
+async function doMatch(withOptions) {
+  const question = $('mQuestion').value.trim();
+  if (!question) { msg('mMsg', false, '请填题干'); return; }
+  const raw = $('mOptions').value.trim();
+  const options = raw ? raw.split('\n').map(l => l.trim()).filter(Boolean) : [];
+  const body = { question, options, type: $('mType').value };
+  const r = await req('/tiku', { method: 'POST', body });
+  if (r.code !== 1) { msg('mMsg', false, r.msg || '未命中（脚本会回退到 AI）'); $('mResult').innerHTML = ''; return; }
+  const ans = (r.answer && r.answer.allAnswer) || [];
+  msg('mMsg', true, '命中');
+  $('mResult').innerHTML = `
+    <div class="card" style="margin-top:10px">
+      <div>答案：<b class="code">${escapeHtml(Array.isArray(ans) ? ans.join(',') : ans)}</b></div>
+      <div class="muted">匹配分：<span class="score">${r.score}</span> · 来源：${escapeHtml(r.source || '-')}</div>
+      ${withOptions && options.length ? '<div class="opt">选项：' + escapeHtml(options.join(' | ')) + '</div>' : ''}
+    </div>`;
+}
+
+/* ══════════════════════════════════════════════════════════════
+ * 导入
+ * ══════════════════════════════════════════════════════════════ */
+function onFilePicked() {
+  const f = $('impFile').files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    let text = String(reader.result || '');
+    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);   // 去 BOM
+    $('impText').value = text;
+    if (/\.json$/i.test(f.name)) $('impFormat').value = 'json';
+    msg('impMsg', true, '已读入 ' + f.name + '（' + text.length + ' 字符）');
+  };
+  reader.readAsText(f, 'utf-8');
+}
+function loadSample() {
+  $('impFormat').value = 'json';
+  $('impText').value = JSON.stringify([
+    { question: '示例：TCP 协议位于 OSI 七层模型的哪一层？', type: '单选题', options: [{ letter: 'A', text: '物理层' }, { letter: 'B', text: '数据链路层' }, { letter: 'C', text: '网络层' }, { letter: 'D', text: '传输层' }], answer: 'D', source: '示例' }
+  ], null, 2);
+}
+async function doImport() {
+  const text = $('impText').value.trim();
+  if (!text) { msg('impMsg', false, '请粘贴内容或选择文件'); return; }
+  const format = $('impFormat').value;
+  let body;
+  try { body = JSON.parse(text); if (!Array.isArray(body) && !body.items && !body.text) body = { text, format }; }
+  catch (e) { body = { text, format }; }
+  const r = await req('/api/bulk', { method: 'POST', body });
+  msg('impMsg', r.code === 1, r.code === 1 ? `导入完成：新增 ${r.added}，合并 ${r.merged}，题库共 ${r.total}` : (r.msg || '失败'));
+  if (r.code === 1) { loadStats(); loadPub(1); }
 }
 
 async function doAdd() {
@@ -163,55 +635,84 @@ async function doAdd() {
   const answer = $('addAnswer').value.trim();
   if (!question || !answer) { msg('addMsg', false, '题干和答案必填'); return; }
   const optRaw = $('addOptions').value.trim();
-  const options = optRaw ? optRaw.split('\n').map(l => { const m = l.match(/^([A-Fa-f])[\s\.、\)）:：]+(.+)$/); return m ? {letter:m[1].toUpperCase(), text:m[2].trim()} : null; }).filter(Boolean) : null;
-  const r = await fetch('/api/add', { method:'POST', headers:Object.assign({'Content-Type':'application/json'}, authHeaders()), body:JSON.stringify({ question, type:$('addType').value, options, answer }) }).then(x => x.json());
-  msg('addMsg', r.code === 1, r.code === 1 ? '已' + (r.action==='merge'?'合并':'新增') + '（id: '+r.id+'）' : (r.msg||'失败'));
-  if (r.code === 1) { $('addQuestion').value=''; $('addOptions').value=''; $('addAnswer').value=''; loadStats(); loadList(curPage); }
+  const options = optRaw ? optRaw.split('\n').map(l => {
+    const m = l.match(/^([A-Ha-h])[\s\.、\)）:：]+\s*(.+)$/);
+    return m ? { letter: m[1].toUpperCase(), text: m[2].trim() } : { letter: '', text: l.trim() };
+  }).filter(o => o.text) : null;
+  const r = await req('/api/add', { method: 'POST', body: { question, type: $('addType').value, options, answer } });
+  msg('addMsg', r.code === 1, r.code === 1 ? '已' + (r.action === 'merge' ? '合并' : '新增') + '（id: ' + r.id + '）' : (r.msg || '失败'));
+  if (r.code === 1) { $('addQuestion').value = ''; $('addOptions').value = ''; $('addAnswer').value = ''; loadStats(); loadPub(pubPage); }
 }
 
-async function doImport() {
-  const text = $('impText').value.trim();
-  if (!text) { msg('impMsg', false, '请粘贴内容'); return; }
-  const format = $('impFormat').value;
-  let body;
-  try { body = JSON.parse(text); if (!Array.isArray(body) && !body.items && !body.text) body = { text, format }; }
-  catch(e) { body = { text, format }; }
-  const r = await fetch('/api/bulk', { method:'POST', headers:Object.assign({'Content-Type':'application/json'}, authHeaders()), body:JSON.stringify(body) }).then(x => x.json());
-  msg('impMsg', r.code === 1, r.code === 1 ? `导入完成：新增 ${r.added}，合并 ${r.merged}，跳过 ${r.skipped}` : (r.msg||'失败'));
-  if (r.code === 1) { loadStats(); loadList(1); }
+/* ══════════════════════════════════════════════════════════════
+ * 远程源
+ * ══════════════════════════════════════════════════════════════ */
+async function loadSources() {
+  const r = await req('/api/sources');
+  if (r.needKey) { $('srcTable').querySelector('tbody').innerHTML = '<tr><td colspan="6" class="muted">需要管理密钥</td></tr>'; return; }
+  const items = r.items || {};
+  const names = Object.keys(items);
+  $('srcTable').querySelector('tbody').innerHTML = names.map(n => {
+    const s = items[n] || {};
+    return `<tr>
+      <td><b>${escapeHtml(n)}</b></td>
+      <td><span class="tag">${escapeHtml(s.protocol || 'tikuAdapter')}</span></td>
+      <td class="code qtext">${escapeHtml(s.url || '')}</td>
+      <td>${escapeHtml(s.timeout || 5000)}ms</td>
+      <td><span class="tag ${s.enabled ? 'ok' : ''}">${s.enabled ? '启用' : '停用'}</span></td>
+      <td class="ops">
+        <button class="ghost sm" onclick="toggleSource('${escapeHtml(n)}')">${s.enabled ? '停用' : '启用'}</button>
+        <button class="danger sm" onclick="delSource('${escapeHtml(n)}')">删</button>
+      </td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6" class="muted">还没配置外部题库 —— 去 tiku888.top 注册后把题库配置贴到下面</td></tr>';
 }
 
-async function loadList(page) {
-  curPage = Math.max(page, 1);
-  const kw = $('listQ').value.trim();
-  const r = await fetch(`/api/q?page=${curPage}&pageSize=${pageSize}&q=${encodeURIComponent(kw)}`).then(x => x.json());
-  const items = r.items || [];
-  $('listMeta').textContent = `共 ${r.total} 条，第 ${r.page} 页`;
-  $('pageInfo').textContent = `${r.page} / ${Math.max(1, Math.ceil(r.total/pageSize))}`;
-  $('prevBtn').disabled = r.page <= 1;
-  $('nextBtn').disabled = r.page * pageSize >= r.total;
-  $('listTable').querySelector('tbody').innerHTML = items.map(it =>
-    `<tr>
-      <td>${escapeHtml(it.question)}</td>
-      <td><span class="tag">${escapeHtml(it.type||'未知')}</span></td>
-      <td class="code">${escapeHtml(it.answer)}</td>
-      <td>${it.count||0}</td>
-      <td><button class="danger" onclick="doDel('${it.id}')">删</button></td>
-    </tr>`).join('');
+async function toggleSource(name) {
+  const r = await req('/api/sources');
+  if (r.code !== 1) { msg('srcMsg', false, r.msg || '读取失败'); return; }
+  const cur = (r.items || {})[name];
+  if (!cur) return;
+  // ⚠ POST /api/sources 是**整体替换**该条配置，所以要把字段摊平原样传回去，
+  //   不能只传 enabled（否则 token/headers 会被清掉）。
+  const body = Object.assign({}, cur, { name, enabled: !cur.enabled });
+  const w = await req('/api/sources', { method: 'POST', body });
+  msg('srcMsg', w.code === 1, w.code === 1 ? '已更新 ' + name : (w.msg || '失败'));
+  loadSources(); loadStats();
 }
 
-async function doDel(id) {
-  if (!confirm('确认删除该题？')) return;
-  const r = await fetch('/api/q/' + id, { method:'DELETE', headers: authHeaders() }).then(x => x.json());
-  if (r.code === 1) { loadStats(); loadList(curPage); }
+async function delSource(name) {
+  if (!confirm('确认删除上游 ' + name + '？')) return;
+  const r = await req('/api/sources/' + encodeURIComponent(name), { method: 'DELETE', json: false });
+  msg('srcMsg', r.code === 1, r.code === 1 ? '已删除' : (r.msg || '失败'));
+  loadSources(); loadStats();
 }
 
-function escapeHtml(s) {
-  return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function doAddSource() {
+  const name = $('srcName').value.trim();
+  const url = $('srcUrl').value.trim();
+  if (!name || !url) { msg('srcMsg', false, '名称和地址必填'); return; }
+  const config = {
+    enabled: $('srcEnabled').checked,
+    protocol: $('srcProto').value,
+    url,
+    timeout: Number($('srcTimeout').value) || 5000,
+    headers: {},
+    note: '手工添加',
+  };
+  const token = $('srcToken').value.trim();
+  if (token) config.token = token;
+  // ⚠ POST /api/sources 收的是**扁平结构**（name/url/protocol/token…），不是 {name, config}
+  const r = await req('/api/sources', { method: 'POST', body: Object.assign({ name }, config) });
+  msg('srcMsg', r.code === 1, r.code === 1 ? '已添加 ' + name : (r.msg || '失败'));
+  if (r.code === 1) { $('srcName').value = ''; $('srcUrl').value = ''; $('srcToken').value = ''; loadSources(); loadStats(); }
 }
 
+/* ══════════════════════════════════════════════════════════════ */
+$('adminKey').value = adminKey;
 loadStats();
-loadList(1);
+loadPub(1);
+ping();
 </script>
 </body>
 </html>
