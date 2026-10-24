@@ -131,6 +131,33 @@ class TikuStore {
     return removed;
   }
 
+  /*
+   * 修改单题（按 id）。
+   * ⚠ 2026-10-24 补：server.js 的 PUT /api/q/:id 一直在调 store.update()，
+   *   而这个方法**从来没实现过** → 编辑题目必然 500（接口接了但不能用）。
+   * 题干改了必须重建精确索引，否则改完就再也查不到这道题。
+   */
+  update(id, patch = {}) {
+    const q = this.data.questions.find(x => x.id === id);
+    if (!q) return false;
+    if (typeof patch.question === 'string' && patch.question.trim()) q.question = patch.question.trim();
+    if (typeof patch.type === 'string') q.type = patch.type.trim();
+    if (typeof patch.answer === 'string') q.answer = patch.answer.trim();
+    if (typeof patch.source === 'string') q.source = patch.source.trim();
+    if (Array.isArray(patch.options)) {
+      q.options = patch.options.map((o, i) => {
+        if (typeof o === 'string') return { letter: String.fromCharCode(65 + i), text: o.trim() };
+        return {
+          letter: String(o.letter || String.fromCharCode(65 + i)).toUpperCase().slice(0, 1),
+          text: String(o.text || o.value || '').trim(),
+        };
+      });
+    }
+    q.updatedAt = Date.now();
+    this.rebuildIndex();   // 题干可能变了 → 索引必须重建
+    return true;
+  }
+
   get(id) {
     return this.data.questions.find(q => q.id === id);
   }
