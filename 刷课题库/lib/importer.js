@@ -76,7 +76,10 @@ function parseTSV(text) {
 }
 
 function parseJSON(text) {
-  const data = JSON.parse(text);
+  // ⚠ 去 BOM：Windows 记事本 / PowerShell Set-Content -Encoding UTF8 写出的文件会带
+//   UTF-8 BOM（\uFEFF），JSON.parse 直接抛 "Unexpected token" → 整个请求 500。
+//   2026-10-23 实测踩过：远程导入带 BOM 的导出文件直接失败。
+const data = JSON.parse(String(text || '').replace(/^\uFEFF/, ''));
   const arr = Array.isArray(data) ? data : (Array.isArray(data.questions) ? data.questions : []);
   const entries = [];
   for (const it of arr) {
