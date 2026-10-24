@@ -56,6 +56,42 @@ const store = new TikuStore();
  */
 const poolStore = new TikuStore(path.join(__dirname, 'data', 'pool.json'));
 
+/*
+ * ── 用户私有池（按 clientId 隔离）──────────────────────────────
+ * 脚本判分回写的题先进**用户自己的池**，只对本人生效 —— 用户之间互不污染。
+ * 用户在脚本里勾了「贡献到公共池」，才会同时进待审池（data/pool.json），
+ * 由管理员审核后晋升公共池（data/tiku.json）。
+ *
+ * 为什么要分池：以前所有用户的回写都堆在同一个待审池里，
+ *   一旦审核通过就进公共池 → A 用户的题会影响 B 用户的答案，
+ *   规模化就变成了「互相投毒」。分池之后：
+ *   · 私有池：只有本人能查，错了只错自己，且随时可清；
+ *   · 公共池：只放审核过的，答案可信度由人保证。
+ *
+ * 私有池文件：data/pools/<clientId>.json（clientId 由脚本用 GM 存储生成，稳定不变）
+ */
+const PRIVATE_POOL_DIR = path.join(__dirname, 'data', 'pools');
+const PRIVATE_POOL_MAX = Number(process.env.PRIVATE_POOL_MAX || 5000);
+const privatePoolCache = new Map();
+
+function sanitizeClientId(raw) {
+  return String(raw || '').trim().replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
+}
+
+function getPrivatePool(clientId) {
+  const id = sanitizeClientId(clientId);
+  if (!id) return null;
+  if (privatePoolCache.has(id)) return privatePoolCache.get(id);
+  try {
+    if (!fs.existsSync(PRIVATE_POOL_DIR)) fs.mkdirSync(PRIVATE_POOL_DIR, { recursive: true });
+  } catch (e) {
+    return null;
+  }
+  const st = new TikuStore(path.join(PRIVATE_POOL_DIR, id + '.json'));
+  privatePoolCache.set(id, st);
+  return st;
+}
+
 // ---------- 首次启动自动导入 seed 目录 ----------
 function autoSeed() {
   if (store.count() > 0) return 0;
@@ -188,13 +224,15 @@ function buildAllAnswer(entry, queryType, queryOptions) {
 }
 
 // 返回 { allAnswer, score, id, source } 或 null
-function searchTiku(question, options, type) {
+// ⚠ targetStore：默认查**公共池**；传入私有池实例时只查那个池（用户自己的题库）。
+function searchTiku(question, options, type, targetStore) {
   if (!question || !String(question).trim()) return null;
+  const st = targetStore || store;
   const qKey = normalize(question);
   const qt = typeKey(type);
 
   const candidates = [];
-  const exact = store.findExact(qKey);
+  const exact = st.findExact(qKey);
 
   const consider = (e, isExact) => {
     const et = typeKey(e.type);
@@ -218,7 +256,7 @@ function searchTiku(question, options, type) {
   }
   // 精确命中全被拒绝（题型不兼容）时，退回全量模糊匹配兜底
   if (!candidates.length) {
-    for (const e of store.all()) consider(e, false);
+    for (const e of st.all()) consider(e, false);
   }
 
   candidates.sort((a, b) => b.score - a.score);
@@ -257,11 +295,20 @@ function searchTiku(question, options, type) {
   return { allAnswer, score: Math.round(topScore * 1000) / 1000, id: top.e.id, source: top.e.source || '' };
 }
 
-// 聚合查询：本地 -> 远程源 -> LLM fallback
-async function queryTiku(question, options, type) {
-  // 1) 本地题库
+// 聚合查询：公共池 -> 用户私有池 -> 远程源 -> LLM fallback
+async function queryTiku(question, options, type, clientId) {
+  // 1) 公共池（所有人共享）
   let r = searchTiku(question, options, type);
   if (r) return { code: 1, answer: { allAnswer: r.allAnswer }, score: r.score, source: r.source };
+
+  // 1.5) 用户私有池（脚本判分回写的题，只有本人查得到）
+  const priv = getPrivatePool(clientId);
+  if (priv) {
+    r = searchTiku(question, options, type, priv);
+    if (r) {
+      return { code: 1, answer: { allAnswer: r.allAnswer }, score: r.score, source: (r.source || '我的题库') };
+    }
+  }
 
   // 2) 远程题库源
   r = await queryAllRemote({ question, options, type });
@@ -324,14 +371,16 @@ function parseQueryInput(req) {
   return {
     question: String(body.question || body.title || '').trim(),
     options: options.map(o => (o && typeof o === 'object' ? (o.text || o.value || '') : String(o))).filter(Boolean),
-    type: String(body.type || '')
+    type: String(body.type || ''),
+    // 用户私有池的归属标识：脚本用 GM 存储生成的稳定 clientId
+    clientId: String(body.clientId || req.get('x-client-id') || '').trim(),
   };
 }
 
 // 核心答题接口（兼容脚本在 URL 后追加的 wannengDisable=1 等参数，忽略即可）
 async function handleTiku(req, res) {
-  const { question, options, type } = parseQueryInput(req);
-  const result = await queryTiku(question, options, type);
+  const { question, options, type, clientId } = parseQueryInput(req);
+  const result = await queryTiku(question, options, type, clientId);
   res.json(result);
 }
 app.post('/tiku', handleTiku);
@@ -357,6 +406,10 @@ app.post('/proxy/:name', async (req, res) => {
 
 // 远程源管理
 app.get('/api/sources', (req, res) => {
+  // ⚠ 2026-10-24 加鉴权：远程源配置里可能带 token / apiKey
+  //   （见 data/remote-sources.example.json 的 "token" 字段）。
+  //   原来公开可读 → 经 8080 反代挂在公网上，任何人都能拿到上游题库的凭据。
+  if (!adminAuthorized(req, res)) return;
   res.json({ code: 1, items: loadRemoteSources() });
 });
 
@@ -434,6 +487,8 @@ app.get('/api/search', (req, res) => {
 
 // 分页列表
 app.get('/api/q', (req, res) => {
+  // ⚠ 2026-10-24 加鉴权：列表里带答案与来源，公开可读等于把整个题库送人。
+  if (!adminAuthorized(req, res)) return;
   const page = Math.max(Number(req.query.page || 1), 1);
   const pageSize = Math.min(Number(req.query.pageSize || 50), 500);
   let list = store.all();
@@ -615,17 +670,45 @@ function validatePoolEntry(b) {
   };
 }
 
-// 脚本回写（公开）：进沉淀池，不参与匹配
+// 脚本回写（公开）：进**用户私有池**；勾了「贡献到公共池」才同时进待审池
 app.post('/api/pool', (req, res) => {
   const ip = String(req.ip || (req.socket && req.socket.remoteAddress) || 'unknown');
   if (!poolRateOk(ip)) {
     return res.status(429).json({ code: 0, msg: '回写过于频繁，已限流' });
   }
-  const v = validatePoolEntry(req.body || {});
+  const b = req.body || {};
+  const v = validatePoolEntry(b);
   if (!v.ok) return res.status(400).json({ code: 0, msg: v.msg });
+
+  const clientId = sanitizeClientId(b.clientId);
+  // contribute 默认为 true：回写的题**总是**同时进待审池（公共池长大的来源）。
+  // 显式传 false 才是「只进我自己���私有池」。
+  const contribute = b.contribute !== false && b.contribute !== 'false';
+
+  // 1) 进**用户自己的私有池**：只有本人查得到，别人既看不到也污染不到
+  if (clientId) {
+    const priv = getPrivatePool(clientId);
+    if (!priv) return res.status(500).json({ code: 0, msg: '私有题库不可用' });
+    if (priv.count() >= PRIVATE_POOL_MAX) {
+      return res.status(400).json({ code: 0, msg: '我的题库已满（上限 ' + PRIVATE_POOL_MAX + ' 条）' });
+    }
+    const pr = priv.upsert(v.entry);
+    priv.save();
+    // 2) 同时进待审池（管理员审核后晋升公共池）——
+    //    这是公共池长大的来源，所以默认**总是**进；
+    //    contribute=false 表示「这次只自己用，不想被别人看到」。
+    if (contribute !== false) {
+      const r = poolStore.upsert(v.entry);
+      poolStore.save();
+      return res.json({ code: 1, ...pr, private: true, contributed: true, poolTotal: poolStore.count() });
+    }
+    return res.json({ code: 1, ...pr, private: true, contributed: false, poolTotal: poolStore.count() });
+  }
+
+  // 没带 clientId（老脚本 / 手工调用）→ 直接进待审池
   const r = poolStore.upsert(v.entry);
   poolStore.save();
-  res.json({ code: 1, ...r, poolTotal: poolStore.count() });
+  res.json({ code: 1, ...r, private: false, poolTotal: poolStore.count() });
 });
 
 // 列出沉淀池（管理员）
@@ -687,6 +770,55 @@ app.delete('/api/q/:id', (req, res) => {
   if (!ok) return res.status(404).json({ code: 0, msg: 'not found' });
   store.save();
   res.json({ code: 1 });
+});
+
+// 导出题库（管理员）：JSON 数组 / CSV / TSV
+app.get('/api/export', (req, res) => {
+  if (!adminAuthorized(req, res)) return;
+  const format = String(req.query.format || 'json').toLowerCase();
+  const list = store.all();
+  const stamp = new Date().toISOString().slice(0, 10);
+  if (format === 'csv' || format === 'tsv') {
+    const sep = format === 'csv' ? ',' : '\t';
+    const lines = [['question', 'type', 'options', 'answer', 'source'].join(sep)];
+    for (const q of list) {
+      const opts = (q.options || []).map((o) => String((o && o.text) || '')).join(' | ');
+      lines.push(
+        [q.question || '', q.type || '', opts, q.answer || '', q.source || '']
+          .map((v) => '"' + String(v).replace(/"/g, '""') + '"')
+          .join(sep)
+      );
+    }
+    // BOM：Excel 打开中文 CSV 才不乱码
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="tiku-${stamp}.${format}"`);
+    res.send('\uFEFF' + lines.join('\r\n'));
+    return;
+  }
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="tiku-${stamp}.json"`);
+  res.send(JSON.stringify(list, null, 2));
+});
+
+// 沉淀池：驳回 / 删除单条（管理员）
+app.delete('/api/pool/:id', (req, res) => {
+  if (!adminAuthorized(req, res)) return;
+  const removed = poolStore.remove(req.params.id);
+  if (removed) poolStore.save();
+  res.json({ code: removed ? 1 : 0, msg: removed ? '已删除' : '条目不存在', poolTotal: poolStore.count() });
+});
+
+// 公共池批量删除（管理员）
+app.post('/api/q/bulk-delete', (req, res) => {
+  if (!adminAuthorized(req, res)) return;
+  const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids : [];
+  if (!ids.length) return res.status(400).json({ code: 0, msg: '需要 ids' });
+  let removed = 0;
+  for (const id of ids) {
+    if (store.remove(id)) removed++;
+  }
+  store.save();
+  res.json({ code: 1, removed, total: store.count() });
 });
 
 // 管理后台页面
