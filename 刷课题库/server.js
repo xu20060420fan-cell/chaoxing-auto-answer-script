@@ -46,6 +46,15 @@ const MIN_SCORE = Number(process.env.MIN_SCORE || 0.55);
 const AMBIGUITY_GAP = Number(process.env.AMBIGUITY_GAP || 0.03);
 
 const store = new TikuStore();
+/*
+ * 沉淀池（pool.json）：脚本自动回写的题目先落这里，**不参与匹配**，
+ * 由管理员审核后才晋升到公共池（tiku.json）。
+ *
+ * 为什么要有这一层：脚本是公开的（GitHub 上人人可下载），任何"藏在脚本里的
+ * 写入口令"都等于没有口令 —— 公开端点只能靠**质量闸 + 限流 + 不参与匹配**来防污染。
+ * 公共池只放审核过的题，答案可信度由人保证。
+ */
+const poolStore = new TikuStore(path.join(__dirname, 'data', 'pool.json'));
 
 // ---------- 首次启动自动导入 seed 目录 ----------
 function autoSeed() {
@@ -270,12 +279,28 @@ async function queryTiku(question, options, type) {
 
 // ---------- HTTP ----------
 const app = express();
+// ⚠ 信任反向代理传来的 X-Forwarded-For：题库服务在 8080 后面（8080 再转 8091），
+//   不开的话 req.ip 全是 127.0.0.1 → 限流会把所有用户算成同一个 IP。
+//   安全前提：上游 nginx 用的是**覆盖**写法（$remote_addr）不是追加，
+//   客户端自己填的 XFF 不算数（见 nginx/conf.d/campus-proxy.inc）。
+app.set('trust proxy', true);
 app.use(cors());
 app.use(express.json({ limit: '20mb' }));
 app.use(express.text({ type: ['text/plain', 'application/x-www-form-urlencoded'] }));
 
 function adminAuthorized(req, res) {
-  if (!ADMIN_KEY) return true;
+  // ⚠ 2026-10-21 安全整改：**未配置密钥时不再「放行全部」**。
+  //   原来 `if (!ADMIN_KEY) return true;` 意味着：只要没设 TIKU_ADMIN_KEY，
+  //   所有写接口对**公网**完全开放（题库服务经 8080 反代挂在公网 8080 上）。
+  //   → 现在改成 fail-closed：没配密钥就**禁用写入**，并在响应里说清楚原因。
+  //   读接口（/api/stats、/api/search、/api/q）不受影响。
+  if (!ADMIN_KEY) {
+    res.status(403).json({
+      code: 0,
+      msg: '题库写接口已禁用：服务端未配置 TIKU_ADMIN_KEY。请在部署环境里设置该环境变量后重启。'
+    });
+    return false;
+  }
   const key = req.get('x-admin-key') || req.query.adminKey || '';
   if (key === ADMIN_KEY) return true;
   res.status(401).json({ code: 0, msg: 'unauthorized' });
@@ -467,7 +492,10 @@ app.post('/api/bulk', (req, res) => {
       answer: e.answer,
       source: e.source || 'bulk'
     });
-    if (r.action === 'added') added++; else if (r.action === 'merged') merged++;
+    // ⚠ 2026-10-23 修：这里原来写的是 'added' / 'merged'，
+    //   而 store.upsert() 实际返回的是 'add' / 'merge'（见 lib/store.js:105/123）
+    //   → 新增与合并的计数**永远是 0**，远程导入后看不到真实结果。
+    if (r.action === 'add') added++; else if (r.action === 'merge') merged++;
   }
   store.save();
   res.json({ code: 1, added, merged, total: store.count() });
@@ -475,6 +503,8 @@ app.post('/api/bulk', (req, res) => {
 
 // 答题成功后回写题目（沉淀池）
 app.post('/api/collect', (req, res) => {
+  // ⚠ 2026-10-21：这条路由原先**完全没有鉴权** → 任何人都能经公网反代往题库里塞题。
+  if (!adminAuthorized(req, res)) return;
   const b = req.body || {};
   const question = String(b.question || '').trim();
   const answer = String(b.answer || '').trim();
@@ -490,6 +520,150 @@ app.post('/api/collect', (req, res) => {
   });
   store.save();
   res.json({ code: 1, ...r });
+});
+
+/*
+ * ============ 沉淀池（公开回写 → 人工审核 → 晋升公共池）============
+ *
+ * 规模化题库的飞轮：
+ *   用户做题 → 脚本判分后自动回写 → 沉淀池 → 管理员审核 → 公共池 → 所有人都能用
+ *
+ * 公开端点为什么不靠密钥鉴权：脚本在 GitHub 公开，"藏在脚本里的密钥"人人可见，
+ * 等于没有密钥。所以靠三层防护：
+ *   ① 质量闸（validatePoolEntry）—— 答案必须在选项里、选项不重复、题型合法；
+ *   ② 单 IP 限流；
+ *   ③ 沉淀池**不参与匹配**，污染不到任何人，审核通过才进公共池。
+ */
+
+// 单 IP 每小时最多回写多少条
+const POOL_RATE_PER_HOUR = Number(process.env.POOL_RATE_PER_HOUR || 120);
+const poolHits = new Map();
+
+function poolRateOk(ip) {
+  const now = Date.now();
+  const rec = poolHits.get(ip);
+  if (!rec || now > rec.resetAt) {
+    poolHits.set(ip, { count: 1, resetAt: now + 3600_000 });
+    return true;
+  }
+  rec.count += 1;
+  return rec.count <= POOL_RATE_PER_HOUR;
+}
+
+// 质量闸：入库前的结构与自洽校验
+function validatePoolEntry(b) {
+  const question = String(b.question || '').trim();
+  const answer = String(b.answer || '').trim();
+  const type = String(b.type || '').trim();
+  if (question.length < 4 || question.length > 500) {
+    return { ok: false, msg: '题干长度需在 4~500 字之间' };
+  }
+  if (!answer || answer.length > 80) {
+    return { ok: false, msg: '答案缺失或过长' };
+  }
+  const allowedTypes = ['单选题', '多选题', '判断题', '填空题', '简答题', '论述题'];
+  if (type && !allowedTypes.includes(type)) {
+    return { ok: false, msg: '题型不合法: ' + type };
+  }
+
+  let options = b.options;
+  if (typeof options === 'string') {
+    try { options = require('./lib/importer').parseOptions(options); } catch (e) { options = null; }
+  }
+  if (Array.isArray(options) && options.length) {
+    if (options.length < 2 || options.length > 8) {
+      return { ok: false, msg: '选项数量需在 2~8 之间' };
+    }
+    /*
+     * 选项两种形态都要收：
+     *   · 字符串数组 —— 脚本回写用的就是这种（['建立可靠连接', ...]）
+     *   · 对象数组 —— 管理后台/导入器给的是 [{letter,text}, ...]
+     * ⚠ 2026-10-23 修：之前只认对象数组，脚本回写的字符串数组被判成"存在空选项"，
+     *   也就是**脚本沉淀一条都进不来**。
+     */
+    const texts = options.map((o) => {
+      if (typeof o === 'string') return o.trim();
+      return String((o && (o.text || o.value || o.label)) || '').trim();
+    });
+    if (texts.some((t) => !t)) return { ok: false, msg: '存在空选项' };
+    if (new Set(texts).size !== texts.length) return { ok: false, msg: '选项内容重复' };
+
+    const isChoice = type === '单选题' || type === '多选题';
+    if (/^[A-H]([\s,，、;；/|]*[A-H])*$/i.test(answer)) {
+      const letters = answer.replace(/[^A-Ha-h]/g, '').toUpperCase().split('');
+      const valid = new Set(texts.map((_, i) => String.fromCharCode(65 + i)));
+      if (letters.some((l) => !valid.has(l))) {
+        return { ok: false, msg: '答案字母不在选项范围内' };
+      }
+      if (type === '单选题' && letters.length > 1) return { ok: false, msg: '单选题却给了多个答案' };
+      if (type === '多选题' && letters.length < 2) return { ok: false, msg: '多选题却只给了一个答案' };
+    } else if (isChoice) {
+      return { ok: false, msg: '选择题的答案必须是选项字母' };
+    }
+    options = texts.map((text, i) => ({ letter: String.fromCharCode(65 + i), text }));
+  }
+
+  return {
+    ok: true,
+    entry: {
+      question,
+      answer,
+      type,
+      options: options && options.length ? options : null,
+      source: String(b.source || 'script').slice(0, 40),
+    },
+  };
+}
+
+// 脚本回写（公开）：进沉淀池，不参与匹配
+app.post('/api/pool', (req, res) => {
+  const ip = String(req.ip || (req.socket && req.socket.remoteAddress) || 'unknown');
+  if (!poolRateOk(ip)) {
+    return res.status(429).json({ code: 0, msg: '回写过于频繁，已限流' });
+  }
+  const v = validatePoolEntry(req.body || {});
+  if (!v.ok) return res.status(400).json({ code: 0, msg: v.msg });
+  const r = poolStore.upsert(v.entry);
+  poolStore.save();
+  res.json({ code: 1, ...r, poolTotal: poolStore.count() });
+});
+
+// 列出沉淀池（管理员）
+app.get('/api/pool', (req, res) => {
+  if (!adminAuthorized(req, res)) return;
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const pageSize = Math.max(1, Math.min(200, Number(req.query.pageSize) || 50));
+  const all = poolStore.all();
+  const total = all.length;
+  const start = (page - 1) * pageSize;
+  res.json({ code: 1, total, page, pageSize, items: all.slice(start, start + pageSize) });
+});
+
+// 沉淀池统计（管理员）
+app.get('/api/pool/stats', (req, res) => {
+  if (!adminAuthorized(req, res)) return;
+  res.json({ code: 1, pool: poolStore.count(), public: store.count() });
+});
+
+// 审核通过 → 晋升到公共池（管理员）
+app.post('/api/pool/promote', (req, res) => {
+  if (!adminAuthorized(req, res)) return;
+  const body = req.body || {};
+  const ids = Array.isArray(body.ids) ? body.ids : (body.id ? [body.id] : []);
+  if (!ids.length) return res.status(400).json({ code: 0, msg: '需要 id 或 ids' });
+  let added = 0, merged = 0, skipped = 0, removed = 0;
+  for (const id of ids) {
+    const item = poolStore.get(id);
+    if (!item) continue;
+    const v = validatePoolEntry(item);
+    if (!v.ok) { skipped++; continue; }
+    const r = store.upsert(v.entry);
+    if (r.action === 'add') added++; else merged++;
+    if (poolStore.remove(id)) removed++;
+  }
+  poolStore.save();
+  store.save();
+  res.json({ code: 1, added, merged, skipped, removed, total: store.count(), poolTotal: poolStore.count() });
 });
 
 app.put('/api/q/:id', (req, res) => {
