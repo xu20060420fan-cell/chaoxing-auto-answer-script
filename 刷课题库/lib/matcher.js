@@ -140,11 +140,15 @@ function remapAnswerByText(answer, entryOptions, queryOptions) {
   if (!Array.isArray(entryOptions) || !entryOptions.length) return letters; // 无选项信息，保持原字母
   if (!Array.isArray(queryOptions) || !queryOptions.length) return letters;
 
-  const qNorm = queryOptions.map(o => normalize(o));
+  const qNorm = queryOptions.map((o) => normalize(typeof o === 'string' ? o : (o && o.text) || ''));
   const result = [];
   for (const L of letters) {
     const i = L.charCodeAt(0) - 65;
-    const entryText = entryOptions[i] ? (entryOptions[i].text || '') : '';
+    const raw = entryOptions[i];
+    // entryOptions 可能是 [{letter,text}]，也可能是纯字符串数组 —— 两种都要认。
+    // 2026-10-21 修：原来只认对象型，字符串型会取到 undefined → entryText 为空 →
+    // 直接回落原字母 → 与 8090 端（xxtTiku.js）行为**相反**，同一输入两端给出不同答案。
+    const entryText = typeof raw === 'string' ? raw : (raw && raw.text) || '';
     if (!entryText) { result.push(L); continue; }
     const target = normalize(entryText);
     let idx = qNorm.findIndex(t => t && t === target);
@@ -155,18 +159,26 @@ function remapAnswerByText(answer, entryOptions, queryOptions) {
 }
 
 // 答案文字与哪个选项最相似
+// options 可能是字符串数组，也可能是 [{letter,text}] —— 统一先取文字再比。
+function optionTextOf(o) {
+  if (typeof o === 'string') return o;
+  if (o && typeof o === 'object') return o.text || o.label || o.content || '';
+  return '';
+}
+
 function bestOptionIndex(answer, options) {
   let best = -1;
   let bestScore = 0.45;
   const ansNorm = normalize(answer);
   options.forEach((o, i) => {
-    const s = similarity(answer, o);
+    const s = similarity(answer, optionTextOf(o));
     if (s > bestScore) { bestScore = s; best = i; }
   });
   // 兜底：答案文本是某个选项的子串，也认
   if (best < 0 && ansNorm) {
     options.forEach((o, i) => {
-      if (normalize(o).includes(ansNorm) || ansNorm.includes(normalize(o))) {
+      const t = normalize(optionTextOf(o));
+      if (t && (t.includes(ansNorm) || ansNorm.includes(t))) {
         best = i;
       }
     });
