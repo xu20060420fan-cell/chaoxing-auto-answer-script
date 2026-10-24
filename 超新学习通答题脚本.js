@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智能自动答题助手
 // @namespace    http://tampermonkey.net/
-// @version      2.9
+// @version      2.10
 // @description  全自动网课答题助手，支持多网课平台、多题库融合、图片题目识别（2026-10-23 实机复核版：修复一章多视频时在多个视频之间轮流重播 / 漏视频 —— 改为播放队列只进不退 + 目标视频互斥 + 按视频地址精确匹配任务点；AI 模型列表对齐 13 家官方最新版；修复自定义 API 刷新后全部 400、AI 请求无超时挂死、跨域图片题 100% 跳过、双 API 答案缓存写穿、思考型模型参数被拒）
 // @author       xu20060420fan-cell
 // @homepage     https://github.com/xu20060420fan-cell/chaoxing-auto-answer-script
@@ -1259,7 +1259,14 @@
             customWhitelist: [],     // 用户自定义网站白名单
             // 题库相关
             // 题库列表：[{id, name, url, enabled}]
-            tikuList: [],            // 多个题库，用户可增删启用
+            // 默认带官方题库（2026-10-23 接后端）。老用户保存过的配置会整体覆盖默认值，
+            // 所以 loadAllConfig() 里还有一处 ensureDefaultTikuList() 负责补回来。
+            tikuList: [{
+                id: 'xspirt',
+                name: '我的题库（官方）',
+                url: 'https://xspirt.online/tiku-api/tiku',
+                enabled: true
+            }],
             tikuEnabled: true,       // 总开关：是否启用题库
             tikuRevalidate: false,   // 题库有答案时，是否再复查一次
             reviewMode: false,       // 复查模式：勾选后，再次验证所有已做题目，不一致则清除
@@ -1281,7 +1288,7 @@
             readSpeed: 1,                // 翻页速度（秒/页）1~10
             studyAutoDiscuss: true,      // 讨论自动回复
             studyDiscussMode: 'random',  // 讨论模式: random/first/lastest/max-show-up/max-fav
-            portalServerBase: '',        // 站点域名（公开入口）
+            portalServerBase: 'https://xspirt.online',  // 站点域名（公开入口）
             portalAuthToken: '',         // 公开接口令牌
             portalRemoteNotice: true,    // 接收站点公告
             portalRemoteConfig: true,    // 接收站点配置
@@ -1728,7 +1735,27 @@
             patch.secondAPIId = secondAPIId || null;
         }
         if (Array.isArray(rawSettings.tikuList)) {
-            patch.tikuList = normalizeRemoteTikuList(rawSettings.tikuList);
+            /*
+             * ⚠ 这里要**合并**而不是覆盖（2026-10-23）：
+             *   后端下发的是「官方题库」，但用户自己在面板里加的题库不能被顶掉 ——
+             *   否则每 5 分钟一次的心跳就会把用户的配置洗掉。
+             *   去重按 url：同一个 url 以服务端版本为准（服务端能改地址、能改开关）。
+             */
+            const remote = normalizeRemoteTikuList(rawSettings.tikuList);
+            const local = Array.isArray(state.settings.tikuList) ? state.settings.tikuList : [];
+            const merged = remote.slice();
+            local.forEach((item) => {
+                if (!item || !String(item.url || '').trim()) return;
+                if (merged.some((m) => m && String(m.url || '').trim() === String(item.url).trim())) return;
+                merged.push({
+                    id: item.id || ('local_' + Date.now().toString(36)),
+                    name: item.name || '本地题库',
+                    url: String(item.url || '').trim(),
+                    enabled: item.enabled !== false,
+                    config: item.config && typeof item.config === 'object' ? item.config : undefined
+                });
+            });
+            patch.tikuList = merged;
         }
         if (rawSettings.portalOpenPath !== undefined) {
             patch.portalOpenPath = normalizePortalRelativePath(rawSettings.portalOpenPath);
@@ -2175,6 +2202,37 @@
         persistAllConfig();
     }
 
+    /*
+     * 官方题库与默认站点地址（2026-10-23 接入后端）。
+     *
+     * 地址为什么是 /tiku-api/tiku 而不是直接 8091：
+     *   · 云服务器安全组只放行了 22 / 8080 / 8090，**8091 出不去**；
+     *   · 主后端 8080 上有 /tiku-api 反代（剥掉前缀再转给 8091 的题库服务），
+     *     所以脚本只跟 8080 打交道最省事，不用动安全组；
+     *   · 8080 的 /tiku-api → 8091 的 /tiku，两段路径拼起来就是 /tiku-api/tiku。
+     */
+    const OFFICIAL_TIKU = {
+        id: 'xspirt',
+        name: '我的题库（官方）',
+        url: 'https://xspirt.online/tiku-api/tiku',
+        enabled: true
+    };
+    const DEFAULT_PORTAL_SERVER_BASE = 'https://xspirt.online';
+
+    /*
+     * 保证官方题库在列表里。
+     * ⚠ 为什么需要它：loadAllConfig() 用 Object.assign(state.settings, data.settings)
+     *   把用户**保存过的配置整体覆盖**到默认值上 —— 老用户当初保存时 tikuList 是空的、
+     *   portalServerBase 也是空的，光改默认值对他们无效，这里显式补回来。
+     */
+    function ensureDefaultTikuList() {
+        const list = Array.isArray(state.settings.tikuList) ? state.settings.tikuList : [];
+        if (!list.some((item) => item && String(item.url || '').trim() === OFFICIAL_TIKU.url)) {
+            list.push({ ...OFFICIAL_TIKU });
+        }
+        state.settings.tikuList = list;
+    }
+
     function loadAllConfig() {
         // 优先读取新键名，兼容旧版 Pro 键名
         let raw = GM_getValue('smart_answer_assistant_v2');
@@ -2197,6 +2255,12 @@
             state.settings.portalOfflineGraceMinutes = Math.max(1, Math.min(1440, parseInt(state.settings.portalOfflineGraceMinutes, 10) || 30));
             state.settings.portalTamperCheck = state.settings.portalTamperCheck !== false;
             state.settings.portalOpenPath = normalizePortalRelativePath(state.settings.portalOpenPath || '/portal/resource/chaoxing-script');
+
+            // 2026-10-23：补齐官方题库与默认站点地址（老用户保存过的空值会覆盖掉默认值）
+            ensureDefaultTikuList();
+            if (!String(state.settings.portalServerBase || '').trim()) {
+                state.settings.portalServerBase = DEFAULT_PORTAL_SERVER_BASE;
+            }
 
             // 迁移：旧版 tikuUrl 字段 → 新版 tikuList 数组
             if (data.settings) {
@@ -3200,6 +3264,125 @@
             return ".question-item";
         }
         return null;
+    }
+
+    /*
+     * 判分后回写题库（2026-10-23 新增）
+     * ------------------------------------------------------------------
+     * 学习通把作业/考试批阅之后，题目容器里会带上**平台判定的正确答案**。
+     * 脚本读到就回写到题库服务 —— 题库因此会随使用量自动变厚。
+     * 这是「自建题库」唯一能规模化增长的路径（人工整理永远追不上）。
+     *
+     * 答案提取沿用「学习通题目导出.user.js」里已在真实环境验证过的两套办法：
+     *   ① .mark_answer .rightAnswerContent —— 结构化，新样式；
+     *   ② 文本锚点「正确答案 / 参考答案」—— 不依赖 class，兼容改版，
+     *      并排除「下列哪个是正确答案？」这类普通问句的误判。
+     *
+     * 题干与选项**复用** detectQuestions() 的结果，不另写一套解析。
+     * 回写地址：{站点}/tiku-api/api/collect —— 8080 反代到 8091 的题库服务
+     * （8091 没放行公网，走 8080 网关最省事）。
+     */
+
+    /* 本次会话已回写过的题干，避免每次扫描都重复提交 */
+    const collectedStems = new Set();
+
+    function extractMarkedCorrectAnswer(questionEl) {
+        if (!questionEl) return '';
+        // ① 结构化答案（.mark_answer .rightAnswerContent）
+        try {
+            const right = questionEl.querySelector('.mark_answer .rightAnswerContent');
+            if (right) {
+                const t = (right.textContent || '').replace(/\s+/g, ' ').trim();
+                const cleaned = t.replace(/^(?:正确答案|参考答案|答案)\s*[:：]?\s*/, '').trim();
+                if (cleaned) return cleaned;
+            }
+        } catch (e) { /* 继续走文本回退 */ }
+        // ② 文本锚点回退（不依赖 class）
+        const plain = (questionEl.textContent || '').replace(/[\u00a0\s]+/g, ' ').trim();
+        const choice = plain.match(/(?:正确|参考)\s*答案\s*[:：]?\s*([A-H](?:\s*[,，、;；/|]\s*[A-H])*)/i);
+        if (choice) return choice[1].replace(/[\s，、;；/|]/g, '').toUpperCase();
+        const judge = plain.match(/(?:正确|参考)\s*答案\s*[:：]?\s*(√|✓|×|✕|✖|正确|错误|对|错|是|否|true|false)/i);
+        if (judge) return judge[1];
+        return '';
+    }
+
+    /* 把一条已判分的题目回写到题库服务 */
+    function postCollectToTiku(payload) {
+        const base = getPortalServerBase();
+        if (!base) return Promise.resolve(false);
+        /*
+         * 回写走**沉淀池**（/tiku-api/api/pool）而不是公共写接口：
+         *   · 脚本是公开的，藏在脚本里的写入口令人人可见 → 公开端点只能不靠密钥；
+         *   · 沉淀池不参与匹配，脏数据污染不到任何人；
+         *   · 由管理员审核后才晋升到公共池（服务端质量闸会自动校验答案是否在选项内）。
+         */
+        const url = String(base).replace(/\/+$/, '') + '/tiku-api/api/pool';
+        return new Promise((resolve) => {
+            try {
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: url,
+                    headers: { 'Content-Type': 'application/json' },
+                    data: JSON.stringify(payload),
+                    timeout: 8000,
+                    onload: function (res) { resolve(res.status >= 200 && res.status < 300); },
+                    onerror: function () { resolve(false); },
+                    ontimeout: function () { resolve(false); }
+                });
+            } catch (e) { resolve(false); }
+        });
+    }
+
+    /*
+     * 扫描当前页面上的已判分题目并回写。
+     * @param {Array} questions detectQuestions() 的结果（不给就自己扫一遍）
+     * @returns {Promise<number>} 实际回写成功的条数
+     */
+    async function collectMarkedAnswers(questions) {
+        try {
+            if (!state.settings.tikuEnabled) return 0;
+            if (!getPortalServerBase()) return 0;
+            let list = questions;
+            if (!Array.isArray(list)) {
+                const root = getPlatformQuestionRoot();
+                if (!root) return 0;
+                list = detectQuestions(root) || [];
+            }
+            if (!list || !list.length) return 0;
+
+            let count = 0;
+            for (const q of list) {
+                try {
+                    const answer = extractMarkedCorrectAnswer(q.element);
+                    if (!answer) continue;                 // 没判分 → 跳过（普通答题页就是这种情况）
+                    const stem = String(q.cleanText || '').trim();
+                    if (!stem || stem.length < 4) continue;
+                    if (collectedStems.has(stem)) continue;
+                    const options = (Array.isArray(q.options) ? q.options : [])
+                        .map((o) => String((o && o.text) || '').replace(/^[A-Ha-h][\.、\)）\s]*/, '').trim())
+                        .filter(Boolean);
+                    if (!options.length) continue;         // 没选项的回写价值低，先跳过
+                    const isJudge = options.length === 2;
+                    const type = isJudge ? '判断题' : (answer.length > 1 ? '多选题' : '单选题');
+                    const ok = await postCollectToTiku({
+                        question: stem,
+                        options: options,
+                        type: type,
+                        answer: answer,
+                        source: '学习通判分自动沉淀'
+                    });
+                    if (ok) {
+                        collectedStems.add(stem);
+                        count++;
+                        addLog('已回写题库：' + stem.slice(0, 30) + ' → ' + answer, 'info');
+                    }
+                } catch (e) { /* 单条失败不影响其它 */ }
+            }
+            if (count) addLog('本次共回写题库 ' + count + ' 道已判分题目', 'info');
+            return count;
+        } catch (e) {
+            return 0;
+        }
     }
 
     function detectQuestions(container) {
@@ -4951,6 +5134,14 @@ async function startAutoAnswer() {
         const questions = detectQuestions(document.body);
         state.questionsList = questions;
         state.totalQuestions = questions.length;
+
+        // 2026-10-23：若这页是已批阅的作业/考试，把平台给出的正确答案回写题库
+        //（异步、不阻塞答题；页面没判分时内部会自动跳过）
+        try {
+            if (typeof collectMarkedAnswers === 'function') {
+                Promise.resolve(collectMarkedAnswers(questions)).catch(() => {});
+            }
+        } catch (e) { /* 回写失败不影响答题流程 */ }
 
         if (questions.length === 0) {
             showToast('未能识别到任何题目', 'error');
