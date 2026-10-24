@@ -1,134 +1,135 @@
-# 刷课题库服务
+# 刷课题库服务（配套远程题库）
 
-「智能自动答题助手」脚本的配套远程题库。提供统一的 tikuAdapter 查询接口、模糊匹配引擎、管理后台与批量导入工具。
+油猴脚本「智能自动答题助手」的配套题库服务。兼容 **tikuAdapter 协议**，
+脚本面板里可以直接把它当普通题库加上。
 
-## 目录结构
+---
 
-```
-刷课题库/
-├── server.js          # 服务入口（Express）
-├── import.js          # 命令行导入工具
-├── admin.html         # 管理后台页面
-├── lib/
-│   ├── matcher.js     # 归一化 / 相似度 / 答案标准化
-│   ├── store.js       # JSON 持久化 + 内存索引（原子落盘 + 备份）
-│   └── importer.js    # TSV / JSON / 纯文本 解析
-├── seed/
-│   └── 计算机网络.csv  # 种子题库（标准内容）
-└── data/
-    └── tiku.json      # 题库数据（自动生成，勿手改）
-```
-
-## 快速开始
+## 一、跑起来
 
 ```bash
-cd 刷课题库
-npm install          # 安装 express + cors
-node server.js       # 默认监听 8091 端口
+node server.js                 # 默认 8091
+PORT=8091 HOST=0.0.0.0 node server.js
 ```
 
-首次启动若 `data/tiku.json` 为空，会自动导入 `seed/` 下所有题库文件。
-
-环境变量（可选）：
+环境变量：
 
 | 变量 | 默认 | 说明 |
-|---|---|---|
+| --- | --- | --- |
 | `PORT` | 8091 | 监听端口 |
 | `HOST` | 0.0.0.0 | 监听地址 |
-| `TIKU_ADMIN_KEY` | 空 | 非空则写接口需 `x-admin-key` 请求头鉴权 |
-| `MIN_SCORE` | 0.55 | 相似度命中阈值，低于此值返回"未命中"（脚本回退 AI） |
-| `AMBIGUITY_GAP` | 0.03 | 最优/次优答案分差小于此值视为歧义，弃答保证准确率 |
+| `TIKU_ADMIN_KEY` | 空 | **后台管理口令**。不配 → 所有写接口 fail-closed（403） |
+| `MIN_SCORE` | 0.55 | 命中阈值，低于视为未命中（宁可回退 AI 也不给错答案） |
+| `AMBIGUITY_GAP` | 0.03 | 最优/次优答案分差小于它 → 判定歧义，弃答 |
+| `LLM_ENABLED` | 关 | 服务端 LLM 兜底（主观题） |
+| `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `LLM_MODEL` | — | LLM 参数 |
+| `PRIVATE_POOL_MAX` | 5000 | 单个用户私有题库上限 |
 
-## 接入脚本
+> **公网暴露走网关**：8091 不对公网开放，由主后端 8080 的 `/tiku-api/*` 反代过来。
+> 脚本里配的题库地址就是 `https://xspirt.online/tiku-api/tiku`。
 
-脚本设置面板 → 题库列表 → 添加题库，URL 填：
+---
+
+## 二、三层题库
+
+| 层 | 文件 | 谁能看到 | 怎么进 |
+| --- | --- | --- | --- |
+| **公共池** | `data/tiku.json` | 所有人 | 管理员导入 / 审核晋升 |
+| **用户私有池** | `data/pools/<clientId>.json` | 只有本人 | 脚本判分回写（带 `clientId`） |
+| **沉淀池（待审）** | `data/pool.json` | 管理员 | 脚本回写时同时进这里，审核后才进公共池 |
+
+**为什么要分三层**：以前所有用户的回写都堆在同一个池子里，审核通过就进公共池
+→ A 用户的题会影响 B 用户的答案，规模化就变成了「互相投毒」。
+分池之后：私有池只有本人能用（回写完立刻可查，不用等审核），
+公共池只放审核过的（答案可信度由人保证）。
+
+---
+
+## 三、接口
+
+### 查询（公开）
 
 ```
-http://<你的服务器IP>:8091/tiku
+GET|POST /tiku
+{ "question": "题干", "options": ["A文本", ...], "type": "单选题", "clientId": "可选" }
+→ { "code": 1, "answer": { "allAnswer": ["C"] }, "score": 1, "source": "计算机网络.csv" }
 ```
 
-脚本会自动按 tikuAdapter 协议 POST `{question, options, type}`，返回 `{answer:{allAnswer:[...]}}`。
+查找顺序：**公共池 → 请求方私有池（按 clientId）→ 远程上游 → LLM 兜底**。
 
-> 注意：服务器必须部署在脚本能访问的地址（本机 `http://127.0.0.1:8091/tiku` 或公网 IP）。用公网时建议在 Tampermonkey 脚本头部加 `// @connect <你的域名或IP>`。
+### 写入
 
-## 批量导入题库
+| 接口 | 鉴权 | 说明 |
+| --- | --- | --- |
+| `POST /api/pool` | 公开（有限流+质量闸） | 脚本回写。带 `clientId` → 进私有池；`contribute:false` → 不进待审池 |
+| `POST /api/add` | 需 key | 加单题 |
+| `POST /api/bulk` | 需 key | 批量导入（`{items:[...]}` / `{text, format}` / 裸 JSON 数组） |
+| `POST /api/collect` | 需 key | 旧版回写口（保留兼容） |
+| `GET /api/q?page=&pageSize=&q=&type=` | 需 key | 题目列表 |
+| `DELETE /api/q/:id` | 需 key | 删题 |
+| `PUT /api/q/:id` | 需 key | 改题 |
+| `POST /api/q/bulk-delete` | 需 key | 批量删题 |
+| `GET /api/pool` / `POST /api/pool/promote` / `DELETE /api/pool/:id` | 需 key | 沉淀池审核 |
+| `GET /api/sources` `POST /api/sources` `DELETE /api/sources/:name` | 读需 key / 写需 key | 外部上游管理 |
+| `GET /api/export?format=json\|csv\|tsv` | 需 key | 导出题库 |
 
-```bash
-# 导入单个文件 / 整个目录
-node import.js seed/计算机网络.csv
-node import.js 我的题库.json json
-node import.js 题目合集.txt text
-node import.js ./某目录
-```
+管理口令放请求头 `x-admin-key`。
 
-### 数据格式
+### 质量闸（写入前自动校验）
 
-**TSV（推荐，与 seed 一致）**，制表符分隔，UTF-8：
+题干 4~500 字 · 答案非空 ≤80 字 · 题型合法 · 选项 2~8 个 · 无空选项 ·
+选项内容不重复 · **答案字母必须在选项范围内** · 单选只能一个答案 · 多选至少两个。
 
-```
-题型	题目	选项	答案
-单选题	OSI参考模型共分为几层？	A.4层 || B.5层 || C.7层 || D.6层	C
-多选题	下列属于网络设备的有？	A.交换机 || B.路由器 || C.网卡 || D.显示器	ABC
-判断题	OSI参考模型共有7层。		对
-填空题	TCP建立连接采用____次握手。		3
-```
+单 IP 回写限流 120 条/小时。
 
-- 题型：`单选题` / `多选题` / `判断题` / `填空题`
-- 选项：`A.xxx || B.xxx || C.xxx || D.xxx`（判断题/填空题留空）
-- 答案：单选 `C`、多选 `ABD`、判断 `对`/`错`、填空直接写内容（多空用 `#` 分隔）
+---
 
-**JSON**：
+## 四、外部上游
+
+`data/remote-sources.json`（复制 `remote-sources.example.json` 改名后填）：
 
 ```json
-[
-  {"question":"题干","type":"单选题","options":[{"letter":"A","text":"选项"},{"letter":"B","text":"选项"}],"answer":"A"},
-  {"question":"题干","type":"填空题","answer":"答案文本"}
-]
+{
+  "xingye": {
+    "enabled": true,
+    "protocol": "tikuAdapter",
+    "url": "https://…/tiku",
+    "timeout": 5000,
+    "headers": {},
+    "token": ""
+  }
+}
 ```
 
-**纯文本**（空行或题号分隔，可多题混合）：
+服务会**并发**查所有启用的上游，第一个有答案的胜出；某个挂了不影响其它（失败回退）。
 
+---
+
+## 五、导入
+
+```bash
+# 本地导入
+node import.js seed/计算机网络.csv
+node import.js 题库.json json
+
+# 直接推进**服务器**上的公共池（不用手传文件）
+node import.js 题库.json json --remote https://xspirt.online/tiku-api --key <管理口令>
 ```
-1. OSI参考模型共分为几层？
-A. 4层
-B. 5层
-C. 7层
-D. 6层
-答案：C
 
-TCP建立连接需要几次握手？
-正确答案：3次
+JSON 格式：
+
+```json
+[{ "question": "题干", "type": "单选题",
+   "options": [{ "letter": "A", "text": "选项文本" }],
+   "answer": "A", "source": "来源" }]
 ```
 
-导入是**去重合并**的：同题干已存在则不覆盖旧答案，只补空缺字段，避免坏数据冲掉好答案。
+`options` 也接受字符串数组 `["选项一", "选项二"]`（按顺序自动编号 A/B/C…）。
 
-## 管理后台
+---
 
-浏览器打开 `http://localhost:8091/`：
+## 六、选项顺序无关
 
-- 实时统计（总量 / 题型分布 / 命中阈值）
-- 搜索匹配预览（带相似度分数，可校验模糊匹配效果）
-- 新增单题、批量导入（粘贴 TSV 或 JSON）
-- 分页浏览 / 删除
-
-## 准确率与扩展性
-
-1. **命中阈值 + 歧义弃答**：相似度低于 `MIN_SCORE` 或"最优/次优答案分差过小"时返回未命中，脚本会自动回退到 AI，宁可少答也不错答。
-2. **题型感知**：判断题/填空题与选择题分开处理；题型不符时相似度打 0.55 折。
-3. **答案标准化**：入库统一（单选字母 / 多选字母排序 / 判断"对错" / 填空文本），响应按题型生成 `allAnswer`。
-4. **持续扩充**：把你课程的真实题目（往届试卷、章节测试、练习）按上面任一种格式丢进 `seed/` 或 `node import.js` 导入即可。**题库准不准、全不全，本质取决于喂进去的真实数据量**——接口和引擎已经把路铺好，剩下的就是积累题目。
-
-## 接口一览
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| POST/GET | `/tiku` | 答题查询（tikuAdapter 协议） |
-| GET | `/api/health` | 健康检查 |
-| GET | `/api/stats` | 统计 |
-| GET | `/api/search?q=` | 模糊搜索预览（带分数） |
-| GET | `/api/q?page=&pageSize=&q=` | 分页列表 |
-| POST | `/api/add` | 新增单题 |
-| POST | `/api/bulk` | 批量导入 |
-| PUT | `/api/q/:id` | 修改 |
-| DELETE | `/api/q/:id` | 删除 |
-| GET | `/` | 管理后台 |
+题库存的是**选项文本**，不是字母 —— 因为换一批题时选项顺序可能打乱，
+按字母存会导致选错。查询时按当前页面的选项文本反查字母（`lib/matcher.js` 的
+`mapAnswerToLetters`），所以题库和页面选项顺序不一致也不会选错。
